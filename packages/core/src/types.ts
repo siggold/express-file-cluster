@@ -72,6 +72,34 @@ export interface RouteMethodMeta {
  */
 export type RouteMeta = Partial<Record<string, RouteMethodMeta>>;
 
+/**
+ * Any Standard Schema validator (zod >=3.24, valibot, arktype, ...) or an object
+ * with a zod-style `safeParse`. EFC never imports a validation library itself.
+ */
+export type Validator =
+  | { readonly '~standard': { validate: (value: unknown) => unknown } }
+  | { safeParse: (value: unknown) => unknown };
+
+/** Validators for each part of the request; every key is optional. */
+export interface RequestSchema {
+  params?: Validator;
+  query?: Validator;
+  body?: Validator;
+}
+
+/**
+ * `export const schema` in a route file: either one `RequestSchema` applied to every
+ * method, or keyed by method (`{ POST: { body }, GET: { query } }`).
+ */
+export type RouteSchema = RequestSchema | Partial<Record<string, RequestSchema>>;
+
+export interface ValidationIssue {
+  location: 'params' | 'query' | 'body';
+  /** Dot-joined path inside that location, e.g. `address.zip`; empty for the root. */
+  path: string;
+  message: string;
+}
+
 export interface MountedRoute extends RouteEntry {
   methods: string[];
   meta?: RouteMeta;

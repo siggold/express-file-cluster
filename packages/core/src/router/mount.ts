@@ -1,5 +1,6 @@
 import type { IRouter, RequestHandler } from 'express';
-import type { MountedRoute, RouteMeta, RouteEntry } from '../types.js';
+import type { MountedRoute, RouteMeta, RouteEntry, RouteSchema } from '../types.js';
+import { schemaFor, validateRequest } from './validate.js';
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const;
 type HttpMethod = (typeof HTTP_METHODS)[number];
@@ -50,6 +51,11 @@ export async function mountRoutes(app: IRouter, routes: RouteEntry[]): Promise<M
         ? (raw as RouteMeta)
         : undefined;
 
+    const schema =
+      mod['schema'] != null && typeof mod['schema'] === 'object'
+        ? (mod['schema'] as RouteSchema)
+        : undefined;
+
     const routePath = route.pattern ?? route.urlPath;
     const paramMapper = route.pattern ? [namedParams(route)] : [];
 
@@ -59,10 +65,13 @@ export async function mountRoutes(app: IRouter, routes: RouteEntry[]): Promise<M
     for (const method of HTTP_METHODS) {
       if (typeof mod[method] === 'function') {
         implemented.push(method);
+        const methodSchema = schemaFor(schema, method);
+        const validation = methodSchema ? [validateRequest(methodSchema)] : [];
         app[method.toLowerCase() as Lowercase<HttpMethod>](
           routePath,
           ...paramMapper,
           ...routeMiddlewares,
+          ...validation,
           asyncWrap(mod[method] as RequestHandler),
         );
       } else {
