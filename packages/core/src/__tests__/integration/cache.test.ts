@@ -276,8 +276,12 @@ export const POST = async (req, res) => { await revokeAllSessions(req.user.id); 
   });
 }
 
-describe('session revocation — cache unreachable', () => {
-  it('fails open for requireAuth, but a revocation attempt reports failure', async () => {
+describe.each([
+  { mode: undefined, me: 503 },
+  { mode: 'reject' as const, me: 503 },
+  { mode: 'allow' as const, me: 200 },
+])('session revocation — cache unreachable (onRevocationCheckError: $mode)', ({ mode, me }) => {
+  it(`answers ${me} for authenticated requests, and a revocation attempt reports failure`, async () => {
     const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'efc-cache-down-'));
     const apiDir = path.join(projectRoot, 'src', 'api');
     writeRoute(
@@ -309,13 +313,23 @@ export const POST = async (req, res) => { await revokeSession(req, res); res.jso
       logging: false,
       jwtSecret: 'cache-test-secret',
       authStrategy: 'localStorage',
-      cache: { backend: 'redis', url: 'redis://127.0.0.1:1', timeout: 200 },
+      cache: {
+        backend: 'redis',
+        url: 'redis://127.0.0.1:1',
+        timeout: 200,
+        ...(mode !== undefined && { onRevocationCheckError: mode }),
+      },
     });
     try {
       const token = (await request(server!).post('/login')).body.token as string;
       const auth = { Authorization: `Bearer ${token}` };
-      expect((await request(server!).get('/me').set(auth)).status).toBe(200);
-      expect((await request(server!).post('/logout').set(auth)).status).toBe(500);
+      const res = await request(server!).get('/me').set(auth);
+      expect(res.status).toBe(me);
+      if (me === 503) expect(res.body).toEqual({ error: 'Service Unavailable', statusCode: 503 });
+      // 'reject' stops the logout route at requireAuth (503); 'allow' reaches revokeSession, which throws (500).
+      expect((await request(server!).post('/logout').set(auth)).status).toBe(
+        mode === 'allow' ? 500 : 503,
+      );
     } finally {
       await closeCache();
       server!.closeAllConnections();

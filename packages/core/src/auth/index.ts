@@ -3,7 +3,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { SignJWT, jwtVerify, type JWTPayload } from 'jose';
 import type { AuthStrategy } from '../types.js';
 import { setCurrentUser } from '../context.js';
-import { isCacheConfigured, rawGet, rawSet } from '../cache/index.js';
+import { isCacheConfigured, rawGet, rawSet, revocationFailureMode } from '../cache/index.js';
 import { getLogger } from '../logger.js';
 
 interface AuthConfig {
@@ -167,11 +167,19 @@ async function authenticate(
       try {
         revoked = await isRevoked(payload);
       } catch (err) {
-        // Fail open: a cache outage must not log every user out. Revocations made
-        // before the outage take effect again once the cache is reachable.
+        const reject = revocationFailureMode() === 'reject';
         if (Date.now() - lastRevocationError > 30_000) {
           lastRevocationError = Date.now();
-          getLogger().error({ err }, 'Session revocation check failed — allowing requests');
+          getLogger().error(
+            { err },
+            `Session revocation check failed — ${reject ? 'rejecting with 503' : 'allowing'} authenticated requests`,
+          );
+        }
+        // 503, not 401: the session isn't invalid, the check is unavailable — clients
+        // shouldn't discard the token and force a re-login over a cache blip.
+        if (reject) {
+          res.status(503).json({ error: 'Service Unavailable', statusCode: 503 });
+          return;
         }
       }
       if (revoked) {

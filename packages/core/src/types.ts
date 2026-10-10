@@ -22,23 +22,36 @@ export interface TaskConfig {
   queue?: string;
 }
 
+interface CacheCommon {
+  /** Key prefix, so apps can share one store. Default: 'efc:'. */
+  prefix?: string;
+  /**
+   * What `requireAuth` does when it can't reach the cache to check for revoked sessions:
+   * - `'reject'` (default): answer 503 — a revoked token can never slip through, at the
+   *   cost of authenticated routes being unavailable during the outage.
+   * - `'allow'`: let the request through and log an error — availability first.
+   */
+  onRevocationCheckError?: 'reject' | 'allow';
+}
+
 export type CacheConfig =
-  | {
+  | (CacheCommon & {
       backend: 'redis';
       /** Default: redis://localhost:6379. Supports rediss://, ACL users and /db. */
       url?: string;
-      /** Key prefix, so apps can share one Redis. Default: 'efc:'. */
-      prefix?: string;
       /** Per-command timeout in ms before treating Redis as unavailable. Default: 1000. */
       timeout?: number;
-    }
-  | {
-      /** Per-process — each cluster worker gets its own. For development and tests. */
+    })
+  | (CacheCommon & {
+      /**
+       * In-process store. Under clustering it lives in the primary and workers reach it
+       * over IPC, so all workers share it — but it is still one machine's memory: not
+       * shared across instances, and emptied on restart. Use Redis for multi-instance.
+       */
       backend: 'memory';
-      prefix?: string;
       /** Least-recently-used entries are evicted beyond this. Default: 10 000. */
       maxEntries?: number;
-    };
+    });
 
 export interface LoggingConfig {
   /** Minimum level to emit. Default: 'info'. */

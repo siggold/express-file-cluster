@@ -64,7 +64,8 @@ both `issueToken` and `signToken`.
 - `revokeAllSessions(userId)`: sets `sess:user:<id>` = `Date.now()` with TTL = `jwtExpiresIn` in seconds.
 - `requireAuth` (only when a cache is configured): after `jwtVerify`, rejects with 401 if `sess:jti:<jti>` exists,
   or if `efc_iat` (fallback `iat*1000`) < the user's cutoff. User id = `payload.sub ?? payload.id`.
-  If the cache read throws → **fail open** (request allowed, error logged at most every 30 s).
+  If the cache read throws → `cache.onRevocationCheckError`: `'reject'` (default) → **503**
+  `{ error: 'Service Unavailable', statusCode: 503 }`; `'allow'` → request passes. Logged at most every 30 s.
 
 ---
 

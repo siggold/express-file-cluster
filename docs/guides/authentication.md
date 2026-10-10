@@ -67,7 +67,7 @@ export const POST = async (req: Request, res: Response) => {
 };
 ```
 
-`revokeSession` needs a `cache` in `ignite()` (Redis in production). Without one, `revokeToken(res)` clears the cookie only — the token itself stays valid until it expires. `revokeAllSessions(userId)` logs a user out of every device. See [Caching & Sessions](./caching.md).
+`revokeSession` needs a `cache` in `ignite()` — projects from `create-efc-app` configure one (Redis when `REDIS_URL` is set, otherwise the in-memory store), and their logout and password-reset routes already revoke sessions. Without one, `revokeToken(res)` clears the cookie only — the token itself stays valid until it expires. `revokeAllSessions(userId)` logs a user out of every device. See [Caching & Sessions](./caching.md).
 
 ### Protecting routes
 

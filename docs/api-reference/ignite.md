@@ -246,10 +246,13 @@ interface CorsConfig {
 ### `cache`
 
 ```ts
-type CacheConfig =
-  | { backend: 'redis'; url?: string; prefix?: string; timeout?: number }
-  | { backend: 'memory'; prefix?: string; maxEntries?: number };
+type CacheConfig = { prefix?: string; onRevocationCheckError?: 'reject' | 'allow' } & (
+  | { backend: 'redis'; url?: string; timeout?: number }
+  | { backend: 'memory'; maxEntries?: number } // shared by this machine's cluster workers via the primary
+);
 ```
+
+`onRevocationCheckError` (default `'reject'`): when the cache can't be reached for a revocation check, `requireAuth` answers 503 (`'reject'`) or lets the request through (`'allow'`).
 
 Enables `cache`, `cacheResponse()` and session revocation (`revokeSession`, `revokeAllSessions`). Connected during Pre-Flight, after the database. See [Caching & Sessions](../guides/caching.md).
 

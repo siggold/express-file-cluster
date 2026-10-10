@@ -218,6 +218,10 @@ const config: EFCConfig = {
   cors: corsOrigins ? { origin: corsOrigins } : true,
   authStrategy: '${opts.authStrategy}',
   tasks: ${tasks},
+  // Cache + session-revocation store (logout really invalidates tokens). Redis when
+  // REDIS_URL is set — shared by every instance; otherwise an in-memory store shared by
+  // this machine's workers, emptied on restart.
+  cache: process.env.REDIS_URL ? { backend: 'redis', url: process.env.REDIS_URL } : { backend: 'memory' },
   globalMiddlewares: [],
 };
 
@@ -625,22 +629,24 @@ ${loginMeta}export const POST = async (req, res) => {
 
   const logoutMeta = opts.routeDocs
     ? ts
-      ? `import type { RouteMeta } from 'express-file-cluster';\n\nexport const meta: RouteMeta = {\n  POST: {\n    description: 'Clear the auth cookie and log the user out.',\n    response: { status: 200, body: { message: 'Logged out successfully' } },\n  },\n};\n\n`
-      : `export const meta = {\n  POST: {\n    description: 'Clear the auth cookie and log the user out.',\n    response: { status: 200, body: { message: 'Logged out successfully' } },\n  },\n};\n\n`
+      ? `import type { RouteMeta } from 'express-file-cluster';\n\nexport const meta: RouteMeta = {\n  POST: {\n    description: 'Revoke the current session and clear the auth cookie.',\n    response: { status: 200, body: { message: 'Logged out successfully' } },\n  },\n};\n\n`
+      : `export const meta = {\n  POST: {\n    description: 'Revoke the current session and clear the auth cookie.',\n    response: { status: 200, body: { message: 'Logged out successfully' } },\n  },\n};\n\n`
     : '';
 
   const logoutContent = ts
-    ? `import { revokeToken } from 'express-file-cluster/auth';
+    ? `import { revokeSession } from 'express-file-cluster/auth';
 import type { Request, Response } from 'express';
-${logoutMeta}export const POST = async (_req: Request, res: Response) => {
-  revokeToken(res);
+${logoutMeta}export const POST = async (req: Request, res: Response) => {
+  // Rejects this token from now on (not just the cookie) — see \`cache\` in efc.config.
+  await revokeSession(req, res);
   res.clearCookie('efc_refresh_token');
   res.json({ message: 'Logged out successfully' });
 };
 `
-    : `import { revokeToken } from 'express-file-cluster/auth';
-${logoutMeta}export const POST = async (_req, res) => {
-  revokeToken(res);
+    : `import { revokeSession } from 'express-file-cluster/auth';
+${logoutMeta}export const POST = async (req, res) => {
+  // Rejects this token from now on (not just the cookie) — see \`cache\` in efc.config.
+  await revokeSession(req, res);
   res.clearCookie('efc_refresh_token');
   res.json({ message: 'Logged out successfully' });
 };
@@ -1851,6 +1857,7 @@ ${sendResetEmail}  }
     const rpContent = ts
         ? `import type { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
+import { revokeAllSessions } from 'express-file-cluster/auth';
 ${rpModelImports}${rpMeta}export const POST = async (req: Request, res: Response) => {
   const { token, password } = req.body;
   if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
@@ -1863,11 +1870,14 @@ ${rpLookup}
 
   const hashed = await bcrypt.hash(password, 10);
 ${rpPersist}
+  // Tokens issued with the old password stop working everywhere.
+  await revokeAllSessions(account.id);
 
   res.json({ message: 'Password reset successfully' });
 };
 `
         : `import bcrypt from 'bcrypt';
+import { revokeAllSessions } from 'express-file-cluster/auth';
 ${rpModelImports}${rpMeta}export const POST = async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
@@ -1880,6 +1890,8 @@ ${rpLookup}
 
   const hashed = await bcrypt.hash(password, 10);
 ${rpPersist}
+  // Tokens issued with the old password stop working everywhere.
+  await revokeAllSessions(account.id);
 
   res.json({ message: 'Password reset successfully' });
 };
@@ -1902,7 +1914,8 @@ ${cpMeta}${mwUser2}
 export const POST = async (req: Request, res: Response) => {
   const { oldPassword, newPassword } = req.body;
   if (!oldPassword || !newPassword) return res.status(400).json({ error: 'oldPassword and newPassword are required' });
-  // TODO: verify old password, hash and update new password
+  // TODO: verify old password, hash and update new password, then sign out other devices:
+  // await revokeAllSessions(req.user.id)  (import from 'express-file-cluster/auth')
   res.json({ message: 'Password changed successfully' });
 };
 `
@@ -1910,7 +1923,8 @@ export const POST = async (req: Request, res: Response) => {
 export const POST = async (req, res) => {
   const { oldPassword, newPassword } = req.body;
   if (!oldPassword || !newPassword) return res.status(400).json({ error: 'oldPassword and newPassword are required' });
-  // TODO: verify old password, hash and update new password
+  // TODO: verify old password, hash and update new password, then sign out other devices:
+  // await revokeAllSessions(req.user.id)  (import from 'express-file-cluster/auth')
   res.json({ message: 'Password changed successfully' });
 };
 `;

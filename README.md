@@ -311,7 +311,7 @@ Invalid writes throw `ModelValidationError` (→ 400 with field `issues`); dupli
 Tokens are stored in `HttpOnly; Secure; SameSite=Strict` cookies — no JS access, no XSS risk.
 
 ```ts
-import { issueToken, revokeToken, requireAuth } from 'express-file-cluster/auth';
+import { issueToken, revokeSession, requireAuth } from 'express-file-cluster/auth';
 
 // Login
 export const POST = async (req, res) => {
@@ -320,14 +320,14 @@ export const POST = async (req, res) => {
   res.json({ ok: true });
 };
 
-// Logout — clears the cookie
+// Logout — needs `cache` in ignite(): the token is rejected from now on, cookie cleared
 export const DELETE = async (req, res) => {
-  revokeToken(res);
+  await revokeSession(req, res);
   res.json({ ok: true });
 };
 ```
 
-With a `cache` configured, `await revokeSession(req, res)` also invalidates the token itself, and `await revokeAllSessions(userId)` logs a user out everywhere — `requireAuth` rejects revoked tokens.
+`await revokeAllSessions(userId)` logs a user out everywhere. Without a cache, `revokeToken(res)` only clears the cookie. If the cache is unreachable, `requireAuth` answers 503 by default (`cache.onRevocationCheckError: 'allow'` lets requests through instead).
 
 ### `localStorage` strategy _(SPA-friendly)_
 

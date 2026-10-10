@@ -78,8 +78,10 @@ interface EFCConfig {
   cors?: boolean | CorsConfig;      // default true
   requestTimeout?: number;          // ms → 408
   logging?: LoggingConfig | false;
-  cache?: { backend: 'redis'; url?: string; prefix?: string; timeout?: number }
-        | { backend: 'memory'; prefix?: string; maxEntries?: number } | false;
+  cache?: ({ prefix?: string; onRevocationCheckError?: 'reject' | 'allow' /* default reject → 503 */ } & (
+          | { backend: 'redis'; url?: string; timeout?: number }
+          | { backend: 'memory'; maxEntries?: number } /* lives in the cluster primary; workers use IPC */
+        )) | false;
   globalMiddlewares?: RequestHandler[];
   onWorkerReady?: (id: number) => void;
   onWorkerCrash?: (id: number, code: number) => void;

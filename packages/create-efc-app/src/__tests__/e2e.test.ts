@@ -175,6 +175,20 @@ describe.skipIf(!RUN).each(STACKS)('create-efc-app — end to end ($label)', (st
     expect(me.status, await me.clone().text()).toBe(200);
 
     expect((await fetch(`${base}/auth/me`)).status).toBe(401);
+
+    // Logout revokes the token itself: replaying the old cookie is rejected by every
+    // worker (Redis cache on the BullMQ stack, the cluster-shared memory cache otherwise).
+    const logout = await fetch(`${base}/auth/logout`, {
+      method: 'POST',
+      headers: { cookie: cookie! },
+    });
+    expect(logout.status, await logout.clone().text()).toBe(200);
+    for (let i = 0; i < 6; i++) {
+      const replay = await fetch(`${base}/auth/me`, {
+        headers: { cookie: cookie!, connection: 'close' },
+      });
+      expect(replay.status).toBe(401);
+    }
   }, 60_000);
 
   it('shuts down cleanly on SIGTERM', async () => {

@@ -1,17 +1,19 @@
+import cluster from 'node:cluster';
 import type { Redis as RedisClient, RedisOptions } from 'ioredis';
 import type { CacheConfig } from '../types.js';
 import { getLogger } from '../logger.js';
 import { notInstalled } from '../db/postgres.js';
 import { parseRedisUrl } from '../tasks/bullmq-backend.js';
+import { connectPrimaryCache } from './ipc.js';
 
 // A small key/value cache with two backends:
 // - redis: shared by every worker and instance — what production wants.
-// - memory: per-process; fine for development and tests, wrong under clustering
-//   (each worker would have its own copy), which ignite() warns about.
+// - memory: in-process; under clustering the primary holds it and workers reach it
+//   over IPC, so it's shared by all workers on the machine (not across machines).
 // Values are JSON-serialised. A Redis outage degrades to cache misses instead of
 // failing the request — a cache must never be the thing that takes the API down.
 
-interface Backend {
+export interface Backend {
   get(key: string): Promise<string | null>;
   set(key: string, value: string, ttlSeconds: number | undefined): Promise<void>;
   del(keys: string[]): Promise<number>;
@@ -19,7 +21,7 @@ interface Backend {
   close(): Promise<void>;
 }
 
-function memoryBackend(maxEntries: number): Backend {
+export function memoryBackend(maxEntries: number): Backend {
   const store = new Map<string, { value: string; expires: number }>();
   const live = (key: string) => {
     const hit = store.get(key);
@@ -124,15 +126,26 @@ async function redisBackend(url: string, timeout: number): Promise<Backend> {
 
 let backend: Backend | null = null;
 let prefix = 'efc:';
+let revocationFailure: 'reject' | 'allow' = 'reject';
+
+/** How requireAuth should treat a failed revocation check — see CacheConfig. */
+export function revocationFailureMode(): 'reject' | 'allow' {
+  return revocationFailure;
+}
 const pending = new Map<string, Promise<unknown>>();
 
 export async function configureCache(config: CacheConfig): Promise<void> {
   await closeCache();
   prefix = config.prefix ?? 'efc:';
-  backend =
-    config.backend === 'redis'
-      ? await redisBackend(config.url ?? 'redis://localhost:6379', config.timeout ?? 1000)
-      : memoryBackend(config.maxEntries ?? 10_000);
+  revocationFailure = config.onRevocationCheckError ?? 'reject';
+  if (config.backend === 'redis') {
+    backend = await redisBackend(config.url ?? 'redis://localhost:6379', config.timeout ?? 1000);
+  } else if (cluster.isWorker) {
+    // Cluster workers share the primary's store over IPC (see cache/ipc.ts).
+    backend = (await connectPrimaryCache()) ?? memoryBackend(config.maxEntries ?? 10_000);
+  } else {
+    backend = memoryBackend(config.maxEntries ?? 10_000);
+  }
 }
 
 export function isCacheConfigured(): boolean {

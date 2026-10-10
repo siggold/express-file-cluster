@@ -15,13 +15,16 @@ const config: EFCConfig = {
 
 | Option | Backend | Default | |
 |---|---|---|---|
-| `backend` | — | — | `'redis'` (shared by all workers and instances) or `'memory'` (per process) |
+| `backend` | — | — | `'redis'` (shared by all workers and instances) or `'memory'` (shared by this machine's workers) |
 | `url` | redis | `redis://localhost:6379` | `rediss://`, ACL users and `/db` supported |
 | `prefix` | both | `'efc:'` | Key prefix, so several apps can share one Redis |
 | `timeout` | redis | `1000` | Per-command ms before Redis counts as unavailable |
 | `maxEntries` | memory | `10000` | Least-recently-used entries are evicted beyond this |
+| `onRevocationCheckError` | both | `'reject'` | What `requireAuth` does if it can't reach the cache — see [outage behaviour](#outage-behaviour) |
 
-Requires `ioredis` for the Redis backend (`npm install ioredis` — BullMQ already depends on it). The **memory** backend is for development and tests: each cluster worker gets its own copy, so cached entries and revoked sessions aren't shared — `ignite()` logs a warning when you combine it with clustering.
+Requires `ioredis` for the Redis backend (`npm install ioredis` — BullMQ already depends on it).
+
+**Memory backend under clustering.** The store lives in the cluster primary and workers reach it over IPC, so every worker on the machine sees the same entries and the same revoked sessions. It is still one machine's memory: not shared between instances behind a load balancer, and emptied on restart (revoked tokens become valid again). Use Redis once you run more than one instance. If workers are started by your own cluster primary instead of `ignite()`'s, there's no EFC primary to answer; each worker then logs a warning and keeps its own store.
 
 ---
 
@@ -103,6 +106,19 @@ await revokeAllSessions(user.id);  // the JWT's `sub` or `id` claim
 
 Entries expire on their own once the tokens they cover would have expired (`jwtExpiresIn`), so the denylist never grows unbounded.
 
-**Outage behaviour.** If the cache is unreachable while `requireAuth` checks a token, the request is **allowed** and an error is logged — an outage shouldn't log every user out. Revocations made before the outage apply again once the cache is back. Calling `revokeSession` / `revokeAllSessions` during an outage **throws**, so a failed logout is never reported as a success.
+### Outage behaviour
+
+If `requireAuth` can't reach the cache to check a token, `onRevocationCheckError` decides:
+
+| Value | Authenticated requests during the outage | |
+|---|---|---|
+| `'reject'` (default) | **503** `{ "error": "Service Unavailable" }` | A revoked token can never slip through. 503 rather than 401, so clients don't discard tokens and force a re-login over a blip. |
+| `'allow'` | pass through | Availability first — revocations made before the outage apply again once the cache is back. |
+
+```ts
+cache: { backend: 'redis', url: process.env.REDIS_URL, onRevocationCheckError: 'allow' },
+```
+
+Either way the failure is logged (at most every 30 seconds), and calling `revokeSession` / `revokeAllSessions` during an outage **throws**, so a failed logout is never reported as a success. Plain `cache.get/set` calls are unaffected — they degrade to misses.
 
 `revokeToken(res)` still exists and only clears the cookie — prefer `revokeSession` when a cache is configured.

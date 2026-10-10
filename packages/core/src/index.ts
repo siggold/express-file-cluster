@@ -22,6 +22,7 @@ import { scanTasks } from './tasks/scanner.js';
 import { initBullMQ, closeBullMQ } from './tasks/bullmq-backend.js';
 import { initPgBoss, closePgBoss } from './tasks/pgboss-backend.js';
 import { configureCache, closeCache } from './cache/index.js';
+import { servePrimaryCache } from './cache/ipc.js';
 import { generateDashboard } from './dashboard.js';
 
 function detectDatabase(url?: string): 'mongodb' | 'postgresql' | undefined {
@@ -79,6 +80,10 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   configureLogger(config.logging);
 
   if (clusterEnabled && cluster.isPrimary) {
+    // The memory cache lives in the primary so all workers share it (cache/ipc.ts).
+    if (config.cache && config.cache.backend === 'memory') {
+      servePrimaryCache(config.cache.maxEntries ?? 10_000);
+    }
     runMaster({
       workers: workers ?? os.cpus().length,
       ...(onWorkerReady !== undefined && { onWorkerReady }),
@@ -139,11 +144,6 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   // Pre-Flight step 1b: Cache (also the session-revocation store requireAuth consults)
   if (config.cache) {
     await configureCache(config.cache);
-    if (config.cache.backend === 'memory' && cluster.isWorker) {
-      getLogger().warn(
-        'cache backend "memory" is per-process: cluster workers do not share entries or revoked sessions — use backend "redis"',
-      );
-    }
   }
 
   // Pre-Flight step 2: Configure auth
