@@ -48,6 +48,8 @@ export interface RouteEntry {
   urlPath: string;
   filePath: string;
   params: string[];
+  /** Set for routes with a catch-all segment; captures map onto `params` in order. */
+  pattern?: RegExp;
 }
 
 export interface RouteMethodMeta {
