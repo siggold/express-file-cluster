@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters as strip } from 'node:util';
 import type { Server } from 'node:http';
 import { ignite } from '../../index.js';
 
@@ -26,7 +27,6 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 describe('integration — logging and request IDs', () => {
   let projectRoot: string;
