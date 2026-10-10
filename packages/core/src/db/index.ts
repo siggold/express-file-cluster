@@ -19,7 +19,13 @@ export function getDbClient(): AnyClient {
 
 export const db: AnyClient = new Proxy({} as AnyClient, {
   get(_target, prop: string) {
-    return getDbClient()[prop];
+    const client = getDbClient();
+    const value = client[prop];
+    // Bind methods to the real client (pg Pool, mongoose Connection) — called through the
+    // proxy, `this` would be the proxy and break clients that rely on their own fields.
+    return typeof value === 'function'
+      ? (value as (...a: unknown[]) => unknown).bind(client)
+      : value;
   },
   set(_target, prop: string, value: unknown) {
     getDbClient()[prop] = value;
@@ -28,4 +34,5 @@ export const db: AnyClient = new Proxy({} as AnyClient, {
 });
 
 export { connectMongo } from './mongo.js';
+export { connectPostgres } from './postgres.js';
 export { defineModel } from './model.js';

@@ -94,10 +94,13 @@ describe.skipIf(!mongoAvailable)('defineModel — live MongoDB integration', () 
   });
 
   it('$currentUser: bare code resolves the whole payload object', async () => {
-    const Audit = defineModel<{ action: string; actor: Record<string, unknown> }>('IntegrationAudit', {
-      action: { type: 'string', required: true },
-      actor: { type: 'object', default: '$currentUser' },
-    });
+    const Audit = defineModel<{ action: string; actor: Record<string, unknown> }>(
+      'IntegrationAudit',
+      {
+        action: { type: 'string', required: true },
+        actor: { type: 'object', default: '$currentUser' },
+      },
+    );
 
     const doc = await runWithContext({ user: { id: 'user-7', role: 'member' } }, () =>
       Audit.create({ action: 'login' }),

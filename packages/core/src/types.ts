@@ -179,52 +179,167 @@ export interface FieldDefinition {
   type: PrimitiveFieldType | 'array';
   required?: boolean;
   unique?: boolean;
+  /** Creates a single-field index. Use `ModelOptions.indexes` for compound/TTL/text. */
+  index?: boolean;
   /** A literal default value, or a `DefaultOperator` sentinel code (see above). */
   default?: unknown;
   /** Restricts the field to a fixed set of values. Valid on `string` and `number` types. */
   enum?: readonly (string | number)[];
-  /** Mongoose model name to reference. Valid on `objectId` types (bare or as an array's `of`). */
-  ref?: string;
-  /** Item type for `array` fields, e.g. `{ type: 'array', of: 'string' }`. Omit for an untyped array. */
-  of?: PrimitiveFieldType;
+  /** Inclusive bounds for `number` (and `date`) fields. */
+  min?: number | Date;
+  max?: number | Date;
+  /** Inclusive length bounds for `string` fields. */
+  minLength?: number;
+  maxLength?: number;
+  /** `string` fields must match this pattern. */
+  match?: RegExp;
   /**
-   * Auto-increments a shared counter (stored in an internal `efc_counters` collection)
-   * and assigns it on insert, before `required` validation runs. `true` uses
-   * `'<ModelName>.<field>'` as the counter key; a string sets an explicit key so
-   * multiple fields/models can share one counter (e.g. a global order number).
-   * Only supported on top-level fields — not inside nested array sub-schemas.
+   * Custom check: return `true` to accept, `false` or an error message to reject.
+   * May be async. Runs on create and on update of this field.
+   */
+  validate?: (value: unknown) => boolean | string | Promise<boolean | string>;
+  /** Model name to reference. Valid on `objectId` types (bare or as an array's `of`). */
+  ref?: string;
+  /**
+   * Item type for `array` fields: a primitive (`of: 'string'`) or a nested schema for an
+   * array of embedded documents (`of: { sku: {...}, qty: {...} }`). Omit for an untyped array.
+   */
+  of?: PrimitiveFieldType | ModelSchema;
+  /**
+   * Typed fields for an embedded `object`, e.g.
+   * `{ type: 'object', required: true, fields: { city: {...}, zip: {...} } }`.
+   * Without `fields`, an `object` stores any JSON value unvalidated.
+   */
+  fields?: ModelSchema;
+  /**
+   * Auto-increments a shared counter and assigns it on insert, before `required`
+   * validation runs. `true` uses `'<ModelName>.<field>'` as the counter key; a string
+   * sets an explicit key so multiple fields/models can share one counter (e.g. a
+   * global order number). MongoDB stores counters in `efc_counters`; PostgreSQL uses a
+   * real `SEQUENCE`. Only supported on top-level fields.
    */
   sequence?: boolean | string;
 }
 
 /**
- * A schema field is either a `FieldDefinition`, or a one-element tuple holding a nested
- * `ModelSchema` — the latter defines an array of embedded sub-documents, e.g.:
- * `route_progress: [{ route_id: { type: 'string' } }]`
+ * A schema field is one of:
+ * - a `FieldDefinition` (`{ type: 'string', required: true }`)
+ * - a nested `ModelSchema` — shorthand for an embedded object with typed fields:
+ *   `address: { city: { type: 'string' }, zip: { type: 'string' } }`
+ * - a one-element tuple holding a nested `ModelSchema` — an array of embedded
+ *   documents: `items: [{ sku: { type: 'string' } }]`
  */
-export type ModelSchema = Record<string, FieldDefinition | [ModelSchema]>;
+export type SchemaField = FieldDefinition | ModelSchema | [ModelSchema];
+export interface ModelSchema {
+  [field: string]: SchemaField;
+}
+
+export type SortDirection = 1 | -1 | 'asc' | 'desc';
 
 export interface ModelQueryOptions {
-  /** Mongoose `.populate()` path(s) to resolve on `objectId`/ref fields. */
+  /** Resolve `objectId` fields that have a `ref` into the referenced records. */
   populate?: string | string[];
+  /** Only return these fields (`id` is always included). */
+  select?: string[];
+}
+
+export interface FindOptions extends ModelQueryOptions {
+  /** e.g. `{ createdAt: -1, name: 'asc' }` — keys are applied in order. */
+  sort?: Record<string, SortDirection>;
+  limit?: number;
+  skip?: number;
+}
+
+export interface IndexDefinition {
+  /** Field → direction (`1` / `-1`), or `'text'` for a full-text index. */
+  fields: Record<string, 1 | -1 | 'text'>;
+  unique?: boolean;
+  /** MongoDB TTL index: documents expire this many seconds after the indexed date. */
+  expireAfterSeconds?: number;
+  name?: string;
 }
 
 export interface ModelOptions {
   /**
-   * Passed straight through to mongoose's own schema `timestamps` option.
    * `true` (the default) adds `createdAt`/`updatedAt`; `false` disables both;
-   * an object lets you rename or selectively disable one, e.g.
+   * an object renames or selectively disables one, e.g.
    * `{ createdAt: 'created_at', updatedAt: false }`.
    */
   timestamps?: boolean | { createdAt?: string | false; updatedAt?: string | false };
+  /** Compound, TTL and text indexes. Applied by `Model.sync()`. */
+  indexes?: IndexDefinition[];
+  /** Collection (MongoDB) or table (PostgreSQL) name. Default: mongoose's pluralised lowercase name. */
+  collection?: string;
 }
 
+/** Comparison operators accepted in filters (the MongoDB query subset both engines support). */
+export interface FilterOperators<V> {
+  $eq?: V | null;
+  $ne?: V | null;
+  $gt?: V;
+  $gte?: V;
+  $lt?: V;
+  $lte?: V;
+  $in?: V[];
+  $nin?: V[];
+  $exists?: boolean;
+  $regex?: string | RegExp;
+}
+
+type FilterValue<V> = V extends readonly (infer I)[]
+  ? I | V | FilterOperators<I>
+  : V | FilterOperators<V> | null;
+
+/**
+ * Query filter. Plain values match by equality (an array field matches if it contains
+ * the value); operators cover comparisons; `$and` / `$or` combine; dotted paths
+ * (`'address.city'`) reach into embedded objects. `id` maps to the primary key.
+ */
+export type Filter<T> = { [K in keyof T]?: FilterValue<T[K]> } & {
+  id?: string | FilterOperators<string>;
+  $and?: Filter<T>[];
+  $or?: Filter<T>[];
+  [dottedPath: `${string}.${string}`]: unknown;
+};
+
+/** Update document: plain fields (shorthand for `$set`) and/or update operators. */
+export type Update<T> =
+  | Partial<T>
+  | {
+      $set?: Partial<T> & { [dottedPath: `${string}.${string}`]: unknown };
+      $unset?: { [K in keyof T]?: true | 1 | '' };
+      $inc?: { [K in keyof T]?: number };
+      $push?: { [K in keyof T]?: unknown };
+      $pull?: { [K in keyof T]?: unknown };
+    };
+
+export type ModelRecord<T> = T & { id: string };
+
 export interface ModelCRUD<T extends object> {
-  find(filter?: Partial<T>, options?: ModelQueryOptions): Promise<T[]>;
-  findById(id: string, options?: ModelQueryOptions): Promise<(T & { id: string }) | null>;
-  findOne(filter: Partial<T>, options?: ModelQueryOptions): Promise<(T & { id: string }) | null>;
-  create(data: Partial<T>): Promise<T & { id: string }>;
-  update(id: string, data: Partial<T>): Promise<(T & { id: string }) | null>;
+  readonly name: string;
+  find(filter?: Filter<T>, options?: FindOptions): Promise<ModelRecord<T>[]>;
+  findById(id: string, options?: ModelQueryOptions): Promise<ModelRecord<T> | null>;
+  findOne(filter: Filter<T>, options?: ModelQueryOptions): Promise<ModelRecord<T> | null>;
+  create(data: Partial<T>): Promise<ModelRecord<T>>;
+  createMany(data: Partial<T>[]): Promise<ModelRecord<T>[]>;
+  /** Validates changed fields (enum, min/max, custom validators) before writing. */
+  update(id: string, data: Update<T>): Promise<ModelRecord<T> | null>;
+  /** Returns the number of records modified. */
+  updateMany(filter: Filter<T>, data: Update<T>): Promise<number>;
   delete(id: string): Promise<void>;
-  count(filter?: Partial<T>): Promise<number>;
+  /** Returns the number of records deleted. */
+  deleteMany(filter: Filter<T>): Promise<number>;
+  count(filter?: Filter<T>): Promise<number>;
+  /** MongoDB aggregation pipeline. Throws on PostgreSQL — use `db.query()` there. */
+  aggregate<R = Record<string, unknown>>(pipeline: Record<string, unknown>[]): Promise<R[]>;
+  /**
+   * The engine-native object: the mongoose `Model` on MongoDB, the Drizzle `pgTable`
+   * on PostgreSQL. Compiles the model if no query has run yet.
+   */
+  raw(): Promise<unknown>;
+  /**
+   * Creates the collection/table, any missing columns, and indexes — never drops or
+   * alters existing data. Call it from a migration (`efc db migrate`).
+   */
+  sync(): Promise<void>;
 }

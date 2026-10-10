@@ -14,6 +14,8 @@ import { configureAuth } from './auth/index.js';
 import { isHttpError } from './errors.js';
 import { connectMongo } from './db/mongo.js';
 import { setDbClient } from './db/index.js';
+import { setDbEngine } from './db/engine.js';
+import { connectPostgres } from './db/postgres.js';
 import { runWithContext } from './context.js';
 import { configureLogger, getLogger, requestLogger } from './logger.js';
 import { scanTasks } from './tasks/scanner.js';
@@ -109,10 +111,14 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
     app.use(mw);
   }
 
-  // Pre-Flight step 1: Connect database
+  // Pre-Flight step 1: Connect database. The engine decides what defineModel compiles to.
+  if (database) setDbEngine(database);
   if (database === 'mongodb' && databaseUrl) {
     const conn = await connectMongo(databaseUrl);
     setDbClient(conn as unknown as Record<string, unknown>);
+  } else if (database === 'postgresql' && databaseUrl) {
+    const pool = await connectPostgres(databaseUrl);
+    setDbClient(pool as unknown as Record<string, unknown>);
   }
 
   // Pre-Flight step 2: Configure auth
@@ -170,9 +176,19 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
             : null;
 
         if (isHttpError(err)) {
-          res.status(err.statusCode).json({ error: err.message, statusCode: err.statusCode });
+          // ModelValidationError carries per-field issues; surface them like route validation does.
+          const issues = (err as { issues?: unknown }).issues;
+          res
+            .status(err.statusCode)
+            .json({
+              error: err.message,
+              statusCode: err.statusCode,
+              ...(issues !== undefined && { issues }),
+            });
         } else if (duckTyped) {
-          res.status(duckTyped.statusCode).json({ error: duckTyped.message, statusCode: duckTyped.statusCode });
+          res
+            .status(duckTyped.statusCode)
+            .json({ error: duckTyped.message, statusCode: duckTyped.statusCode });
         } else {
           getLogger().error({ err }, 'Unhandled error');
           res.status(500).json({ error: 'Internal Server Error', statusCode: 500 });
@@ -233,6 +249,8 @@ export { HttpError, isHttpError } from './errors.js';
 export { logger, getLogger } from './logger.js';
 export { compose } from './compose.js';
 export { db, setDbClient, getDbClient, defineModel } from './db/index.js';
+export { transaction } from './db/transaction.js';
+export { ModelValidationError } from './db/schema.js';
 export { scanDir } from './router/scan.js';
 export { listTasks } from './tasks/index.js';
 export { workerCount } from './cluster/index.js';
@@ -252,6 +270,14 @@ export type {
   DatabaseEngine,
   AuthStrategy,
   ModelSchema,
+  SchemaField,
+  Filter,
+  FilterOperators,
+  Update,
+  FindOptions,
+  IndexDefinition,
+  ModelRecord,
+  SortDirection,
   ModelCRUD,
   ModelQueryOptions,
   ModelOptions,
