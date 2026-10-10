@@ -6,6 +6,7 @@ export default defineConfig({
     'auth/index': 'src/auth/index.ts',
     'tasks/index': 'src/tasks/index.ts',
     'cli/index': 'src/cli/index.ts',
+    'cli/db-runner': 'src/cli/db-runner.ts',
   },
   format: ['cjs', 'esm'],
   dts: true,

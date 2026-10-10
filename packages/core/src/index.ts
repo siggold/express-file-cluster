@@ -283,6 +283,7 @@ export type {
   DatabaseEngine,
   AuthStrategy,
   ModelSchema,
+  MigrationContext,
   SchemaField,
   Filter,
   FilterOperators,

@@ -348,3 +348,10 @@ export interface ModelCRUD<T extends object> {
    */
   sync(): Promise<void>;
 }
+
+/** Passed to migration `up`/`down` functions and seed functions. */
+export interface MigrationContext {
+  /** The native client: a mongoose `Connection` (MongoDB) or a node-postgres `Pool`. */
+  db: unknown;
+  engine: DatabaseEngine;
+}

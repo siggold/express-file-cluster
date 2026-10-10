@@ -6,6 +6,7 @@ import { buildCommand } from './commands/build.js';
 import { runCommand } from './commands/run.js';
 import { generateCommand } from './commands/generate.js';
 import { diagnosticsCommands } from './commands/diagnostics.js';
+import { dbCommand } from './commands/db.js';
 
 // package.json sits two levels up from both src/cli/index.ts and dist/cli/index.js.
 const { version } = JSON.parse(
@@ -18,6 +19,7 @@ program.addCommand(startCommand());
 program.addCommand(buildCommand());
 program.addCommand(runCommand());
 program.addCommand(generateCommand());
+program.addCommand(dbCommand());
 
 for (const cmd of diagnosticsCommands()) {
   program.addCommand(cmd);

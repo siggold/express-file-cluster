@@ -9,6 +9,7 @@ import {
   type SchemaTree,
 } from './schema.js';
 import { currentTx } from './engine.js';
+import { notInstalled } from './postgres.js';
 
 type AnyRecord = Record<string, unknown>;
 export type EngineModel<T extends object> = Omit<ModelCRUD<T>, 'name'>;
@@ -18,9 +19,9 @@ let mongoosePromise: Promise<typeof MongooseNS> | undefined;
 export function loadMongoose(): Promise<typeof MongooseNS> {
   mongoosePromise ??= import('mongoose')
     .then((mod) => ((mod as { default?: typeof MongooseNS }).default ?? mod) as typeof MongooseNS)
-    .catch(() => {
+    .catch((err: unknown) => {
       mongoosePromise = undefined;
-      throw new Error('[EFC] mongoose is not installed. Run: npm install mongoose');
+      throw notInstalled(err, 'mongoose', 'npm install mongoose');
     });
   return mongoosePromise;
 }
