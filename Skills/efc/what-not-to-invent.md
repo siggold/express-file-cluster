@@ -181,8 +181,11 @@ Implemented commands: `start dev|prod`, `build prod`, `run tests`, `generate rou
 // that stores a rotating refresh token in the DB — that's app code, not core)
 refreshToken()          // does NOT exist as a core export
 
-// ❌ No token blocklist / invalidation list
-// revokeToken() only clears the cookie — the JWT remains cryptographically valid
+// ✅ Token revocation DOES exist — but only with ignite({ cache }):
+//    await revokeSession(req, res)      — this token
+//    await revokeAllSessions(userId)    — every token issued to the user before now
+// revokeToken(res) still ONLY clears the cookie.
+// ❌ No refresh-token rotation or session listing ("show my active devices") in core
 
 // ❌ No per-route strategy override
 // authStrategy is global — set once in ignite()

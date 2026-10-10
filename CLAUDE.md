@@ -14,6 +14,7 @@ A backend framework called **express-file-cluster** (`express-file-cluster` on n
 - JWT auth (http-only cookie or Bearer token)
 - `defineModel` on MongoDB (mongoose) and PostgreSQL (Drizzle) — one API
 - Structured logging (pino) with request IDs
+- Cache (`cache`, `cacheResponse`) on Redis or memory, also used as the JWT session-revocation store
 - CLI (`efc` binary) incl. migrations, seeds and a read-only studio
 
 **Status: v0.4.0 Beta (Phase 2 complete).** See `README.md` and `docs/` for full documentation.
@@ -35,8 +36,9 @@ docs/                    ← documentation
 
 ```ts
 import { ignite, gracefulShutdown, compose, HttpError, db, defineModel, transaction,
-         ModelValidationError, logger, getLogger } from 'express-file-cluster'
-import { issueToken, revokeToken, signToken, requireAuth, getCurrentUser } from 'express-file-cluster/auth'
+         ModelValidationError, logger, getLogger, cache, cacheResponse } from 'express-file-cluster'
+import { issueToken, revokeToken, revokeSession, revokeAllSessions, signToken, requireAuth,
+         getCurrentUser } from 'express-file-cluster/auth'
 import { defineTask, enqueue } from 'express-file-cluster/tasks'
 ```
 
@@ -94,7 +96,7 @@ src/api/docs/[...slug].ts    → /docs/a/b  (req.params.slug = ['a', 'b'])
 
 0. Configure logging (before the primary/worker split)
 1. Create Express + request context, request IDs/logging, optional `requestTimeout`, CORS, json, cookieParser
-2. Connect database + set the model engine (if `database`/`databaseUrl`)
+2. Connect database + set the model engine (if `database`/`databaseUrl`), then the cache (if `cache`)
 3. Configure auth (if `jwtSecret` set)
 4. Scan + register tasks (`src/tasks`)
 5. Start task queue backend (if `tasks` set) — cron sync runs in the background
@@ -122,7 +124,9 @@ Do not suggest or generate code for these features.
 - `apiDir`/`tasksDir` are not `ignite()` options — `src/api` and `src/tasks` are resolved by convention
 - `db` throws if accessed before Pre-Flight (not safe at module load time)
 - `requireAuth` is dual-purpose: bare (`requireAuth`) it just verifies the JWT; called with role names (`requireAuth('admin')`) it returns a middleware that also enforces `payload.role`
-- `revokeToken` only clears the cookie — the JWT remains valid until expiry
+- `revokeToken` only clears the cookie — the JWT remains valid until expiry. `revokeSession(req, res?)` / `revokeAllSessions(userId)` actually revoke, but need `cache` configured; `requireAuth` fails OPEN if the cache is unreachable, while the revoke calls throw
+- The `memory` cache backend is per-process — under clustering, workers don't share entries or revocations; use `redis`
+- `cache` operations never throw on a Redis outage (misses / no-ops); they DO throw if no cache is configured
 - `efc.config.ts` is informational; `src/index.ts` is the actual runtime entrypoint
 - `efc build prod` transpiles `src/**` unbundled → `dist/src/**` (entry `dist/src/index.js`); routes/tasks must exist as files in `dist/` because they're discovered by filesystem scan
 - New runtime packages imported by core must be `dependencies` or (optional) `peerDependencies` — tsup bundles devDependency-only imports into `dist`, which breaks CJS packages at runtime

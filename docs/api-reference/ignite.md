@@ -51,6 +51,9 @@ interface EFCConfig {
   // Logging
   logging?: LoggingConfig | false;
 
+  // Cache + session revocation store
+  cache?: CacheConfig | false;
+
   // Developer tools
   dashboard?: boolean;
 }
@@ -237,6 +240,18 @@ interface CorsConfig {
   maxAge?: number;
 }
 ```
+
+---
+
+### `cache`
+
+```ts
+type CacheConfig =
+  | { backend: 'redis'; url?: string; prefix?: string; timeout?: number }
+  | { backend: 'memory'; prefix?: string; maxEntries?: number };
+```
+
+Enables `cache`, `cacheResponse()` and session revocation (`revokeSession`, `revokeAllSessions`). Connected during Pre-Flight, after the database. See [Caching & Sessions](../guides/caching.md).
 
 ---
 

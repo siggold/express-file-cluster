@@ -179,9 +179,9 @@ Every item below is covered by tests that run in CI (MongoDB, MongoDB replica se
 - [x] Driver loaders reported every import failure as "not installed"; now only genuinely missing modules.
 - [x] Scaffolder: PostgreSQL + pg-boss selectable again; ~550 lines of Drizzle stubs removed (generated code is engine-agnostic); init migration; `db:*` scripts; REDIS_URL only for BullMQ.
 
-### Not done — deliberately out of scope
+### Not done — deliberately out of scope (and the late addition)
 
-- Plan.md's "Redis adapter (cache + session store)" was never on this checklist; not started.
+- [x] **Redis adapter (cache + session store)** — from plan.md's Phase 2 table, added 2026-10-10: `ignite({ cache })` with Redis or memory backends, `cache` API (`get/set/has/del/wrap/clear`), `cacheResponse()` middleware, and JWT session revocation (`revokeSession`, `revokeAllSessions`) enforced by `requireAuth`. Redis outages degrade to misses; revocation checks fail open, revoke calls fail loudly (`integration/cache.test.ts`, both backends).
 - No schema-diff migration generator (`efc db generate`) — migrations are hand-written around `sync()`.
 
 ---

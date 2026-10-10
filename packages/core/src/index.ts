@@ -21,6 +21,7 @@ import { configureLogger, getLogger, requestLogger } from './logger.js';
 import { scanTasks } from './tasks/scanner.js';
 import { initBullMQ, closeBullMQ } from './tasks/bullmq-backend.js';
 import { initPgBoss, closePgBoss } from './tasks/pgboss-backend.js';
+import { configureCache, closeCache } from './cache/index.js';
 import { generateDashboard } from './dashboard.js';
 
 function detectDatabase(url?: string): 'mongodb' | 'postgresql' | undefined {
@@ -133,6 +134,16 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   } else if (database === 'postgresql' && databaseUrl) {
     const pool = await connectPostgres(databaseUrl);
     setDbClient(pool as unknown as Record<string, unknown>);
+  }
+
+  // Pre-Flight step 1b: Cache (also the session-revocation store requireAuth consults)
+  if (config.cache) {
+    await configureCache(config.cache);
+    if (config.cache.backend === 'memory' && cluster.isWorker) {
+      getLogger().warn(
+        'cache backend "memory" is per-process: cluster workers do not share entries or revoked sessions — use backend "redis"',
+      );
+    }
   }
 
   // Pre-Flight step 2: Configure auth
@@ -255,7 +266,7 @@ export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10
       server.close(() => {
         getLogger().info('Server closed');
         // Let in-flight task jobs finish before exiting; the timeout below still caps it.
-        Promise.all([closeBullMQ(), closePgBoss()])
+        Promise.all([closeBullMQ(), closePgBoss(), closeCache()])
           .catch((err: unknown) => getLogger().error({ err }, 'Task backend close failed'))
           .finally(() => process.exit(0));
       });
@@ -278,6 +289,8 @@ export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10
 
 export { HttpError, isHttpError } from './errors.js';
 export { logger, getLogger } from './logger.js';
+export { cache } from './cache/index.js';
+export { cacheResponse } from './cache/response.js';
 export { compose } from './compose.js';
 export { db, setDbClient, getDbClient, defineModel } from './db/index.js';
 export { transaction } from './db/transaction.js';
@@ -293,6 +306,7 @@ export type {
   RouteMethodMeta,
   RouteSchema,
   LoggingConfig,
+  CacheConfig,
   RequestSchema,
   Validator,
   ValidationIssue,

@@ -6,6 +6,8 @@ EFC ships a JWT-based authentication module with two delivery strategies. All fu
 import {
   issueToken,
   revokeToken,
+  revokeSession,
+  revokeAllSessions,
   signToken,
   requireAuth,
   getCurrentUser,
@@ -73,6 +75,28 @@ export const POST = async (req, res) => {
   res.json({ message: 'Logged out' });
 };
 ```
+
+This only removes the cookie — a copy of the token stays valid until it expires. To actually invalidate it, configure a `cache` and use `revokeSession`.
+
+---
+
+## `revokeSession(req, res?)`
+
+```ts
+async function revokeSession(req: Request, res?: Response): Promise<void>
+```
+
+Rejects the token the request was authenticated with — `requireAuth` answers 401 for it from now until it would have expired. Passing `res` also clears the cookie (http-only strategy). Requires `cache` in `ignite()`; throws if the cache is unreachable.
+
+## `revokeAllSessions(userId)`
+
+```ts
+async function revokeAllSessions(userId: string | number): Promise<void>
+```
+
+Rejects every token issued to that user (`sub` or `id` claim) before now — "log out everywhere" or after a password change. Tokens issued afterwards are unaffected. Requires `cache`.
+
+Every token EFC signs carries a `jti` and an issue time, which these checks use. See [Caching & Sessions](../guides/caching.md#session-revocation) for the outage behaviour.
 
 ---
 

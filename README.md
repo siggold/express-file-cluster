@@ -42,6 +42,7 @@ efc start dev
 - [Middleware](#middleware)
 - [Database](#database)
 - [Authentication](#authentication)
+- [Caching](#caching)
 - [Background Tasks](#background-tasks)
 - [Clustering](#clustering)
 - [Error Handling](#error-handling)
@@ -319,12 +320,14 @@ export const POST = async (req, res) => {
   res.json({ ok: true });
 };
 
-// Logout
+// Logout — clears the cookie
 export const DELETE = async (req, res) => {
   revokeToken(res);
   res.json({ ok: true });
 };
 ```
+
+With a `cache` configured, `await revokeSession(req, res)` also invalidates the token itself, and `await revokeAllSessions(userId)` logs a user out everywhere — `requireAuth` rejects revoked tokens.
 
 ### `localStorage` strategy _(SPA-friendly)_
 
@@ -360,6 +363,26 @@ import { getCurrentUser } from 'express-file-cluster/auth';
 // Available anywhere inside a request (including inside defineModel defaults)
 const user = getCurrentUser(); // Record<string, unknown> | undefined
 ```
+
+---
+
+## Caching
+
+```ts
+ignite({ ...config, cache: { backend: 'redis', url: process.env.REDIS_URL } }); // or { backend: 'memory' }
+```
+
+```ts
+import { cache, cacheResponse } from 'express-file-cluster';
+
+const stats = await cache.wrap('stats:daily', 60, () => computeStats()); // get-or-compute
+await cache.set('k', value, { ttl: 300 });
+await cache.clear('res:/v1/api/products');                               // invalidate by prefix
+
+export const middlewares = [cacheResponse(60)];                           // cache GET responses (X-Cache: HIT|MISS)
+```
+
+A Redis outage degrades to cache misses rather than failing requests. The same cache backs session revocation (see Authentication).
 
 ---
 

@@ -40,6 +40,7 @@
 | [Migrations & Seeds](./guides/migrations.md) | `efc db migrate / rollback / seed / studio` |
 | [Validation](./guides/validation.md) | Route `schema` exports with zod, valibot, arktype |
 | [Logging](./guides/logging.md) | pino, request IDs, `getLogger()` |
+| [Caching & Sessions](./guides/caching.md) | `cache`, `cacheResponse`, revoking JWT sessions |
 | [Generated Portals](./guides/generated-portals.md) | Every model and route `create-efc-app` scaffolds for the User/Admin portals |
 | [Mailer](./guides/mailer.md) | Gmail (app password) and custom SMTP setup, sending email from a task |
 | [Environment Variables](./guides/environment-variables.md) | Full `.env` reference |

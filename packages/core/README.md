@@ -315,6 +315,11 @@ export const POST = async (req, res) => {
 // Role-gated route
 export const middlewares = [requireAuth('admin')];
 
+// Real logout (needs `cache` in ignite()): the token is rejected from now on.
+import { revokeSession, revokeAllSessions } from 'express-file-cluster/auth';
+await revokeSession(req, res);   // this device
+await revokeAllSessions(userId); // every device
+
 // getCurrentUser() reads the same verified JWT payload from anywhere in the
 // async call chain — not just where `req` is in scope. This is also what
 // powers the '$currentUser' / '$currentUser.<key>' defineModel default codes.
@@ -382,6 +387,7 @@ ignite({
 | `cors` | `boolean \| CorsConfig` | `true` | CORS — pass `origin` explicitly, not auto-read from env |
 | `requestTimeout` | `number` | — | Request timeout in ms (408 on exceed) |
 | `logging` | `LoggingConfig \| false` | pretty in dev TTY, JSON otherwise | pino logging; every request gets an `X-Request-Id` |
+| `cache` | `CacheConfig \| false` | — | `{ backend: 'redis', url }` or `{ backend: 'memory' }` — enables `cache`, `cacheResponse()` and session revocation |
 | `globalMiddlewares` | `RequestHandler[]` | `[]` | Applied to every route |
 | `dashboard` | `boolean` | `true` in dev | Dev route dashboard at `/` |
 | `onWorkerReady` | `(id) => void` | — | Called when a worker boots |

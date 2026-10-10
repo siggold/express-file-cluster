@@ -57,13 +57,17 @@ In development (`NODE_ENV !== 'production'`), `Secure` is omitted so the cookie 
 ```ts
 // src/api/auth/logout.ts
 import type { Request, Response } from 'express';
-import { revokeToken } from 'express-file-cluster/auth';
+import { requireAuth, revokeSession } from 'express-file-cluster/auth';
+
+export const middlewares = [requireAuth];
 
 export const POST = async (req: Request, res: Response) => {
-  revokeToken(res);
+  await revokeSession(req, res); // invalidates the token and clears the cookie
   res.json({ message: 'Logged out' });
 };
 ```
+
+`revokeSession` needs a `cache` in `ignite()` (Redis in production). Without one, `revokeToken(res)` clears the cookie only — the token itself stays valid until it expires. `revokeAllSessions(userId)` logs a user out of every device. See [Caching & Sessions](./caching.md).
 
 ### Protecting routes
 

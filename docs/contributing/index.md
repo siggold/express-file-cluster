@@ -94,7 +94,7 @@ The framework package published as `express-file-cluster`. Sub-path exports:
 | Import | Source |
 |---|---|
 | `express-file-cluster` | `src/index.ts` — `ignite`, `gracefulShutdown`, `HttpError`, `compose`, `db`, `defineModel` |
-| `express-file-cluster/auth` | `src/auth/index.ts` — `issueToken`, `revokeToken`, `signToken`, `requireAuth` |
+| `express-file-cluster/auth` | `src/auth/index.ts` — `issueToken`, `revokeToken`, `revokeSession`, `revokeAllSessions`, `signToken`, `requireAuth`, `getCurrentUser` |
 | `express-file-cluster/tasks` | `src/tasks/index.ts` — `defineTask`, `enqueue` |
 | `express-file-cluster/cli` | `src/cli/index.ts` — the `efc` binary |
 

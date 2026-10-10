@@ -50,7 +50,21 @@ Cookie name: exactly `'efc_token'` (hardcoded).
 res.clearCookie('efc_token')
 ```
 
-That's the entire implementation. Clears the cookie. The JWT itself is not invalidated (no blocklist).
+That's the entire implementation. Clears the cookie. The JWT itself is not invalidated — use `revokeSession` for that.
+
+---
+
+## Session revocation (`revokeSession`, `revokeAllSessions`) — needs `cache`
+
+Every signed token now carries `jti` (randomUUID), `iat`, and `efc_iat` (ms) — via the shared `sign()` used by
+both `issueToken` and `signToken`.
+
+- `revokeSession(req, res?)`: verifies the request's token, sets cache key `sess:jti:<jti>` with TTL = `exp - now`;
+  clears the cookie when `res` is given and strategy is http-only. Throws if no cache / cache unreachable.
+- `revokeAllSessions(userId)`: sets `sess:user:<id>` = `Date.now()` with TTL = `jwtExpiresIn` in seconds.
+- `requireAuth` (only when a cache is configured): after `jwtVerify`, rejects with 401 if `sess:jti:<jti>` exists,
+  or if `efc_iat` (fallback `iat*1000`) < the user's cutoff. User id = `payload.sub ?? payload.id`.
+  If the cache read throws → **fail open** (request allowed, error logged at most every 30 s).
 
 ---
 
@@ -121,6 +135,6 @@ Format accepted by `jose`: `'15m'`, `'1h'`, `'7d'`, `'30d'`, integer seconds, et
 ## What auth does NOT do
 
 - No refresh tokens in the framework itself (the scaffolder can generate an app-level `/auth/refresh` route backed by a DB-stored token — that's app code, not a core export).
-- No token blocklist / revocation list (revoking just clears the cookie — a stolen token remains valid until it expires).
+- No revocation without a `cache` configured (then `revokeToken` just clears the cookie and a copied token stays valid until it expires). With a cache: `revokeSession` / `revokeAllSessions`.
 - No CSRF token — relies on `SameSite: Strict` for http-only strategy.
 - No multi-strategy per-route override — `authStrategy` is global, set once in `ignite()`.

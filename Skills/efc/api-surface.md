@@ -41,6 +41,17 @@ function getDbClient(): Record<string, unknown>
 const logger: Logger           // proxy for getLogger()
 function getLogger(): Logger   // request-scoped child (carries reqId) inside a request, root otherwise
 
+// Cache — needs ignite({ cache }); throws "Cache not configured" otherwise.
+// Redis outage → get = undefined, set/del no-ops, wrap computes (never throws).
+const cache: {
+  get<T>(key): Promise<T | undefined>; set(key, value, { ttl?: seconds }?): Promise<void>;
+  has(key): Promise<boolean>; del(...keys): Promise<number>;
+  wrap<T>(key, ttlOrOptions, fn: () => Promise<T>): Promise<T>;  // in-process stampede dedupe
+  clear(prefix?): Promise<number>;
+}
+function cacheResponse(ttl: number | { ttl; perUser?: boolean; key?: (req) => string }): RequestHandler
+// GET/HEAD 200 JSON only; X-Cache: HIT|MISS; keys under 'res:' + originalUrl
+
 function scanDir(dir: string, base?: string, maxDepth?: number): RouteEntry[]
 function listTasks(): ReadonlyArray<{ name: string; options: TaskOptions }>
 function workerCount(): number
@@ -67,6 +78,8 @@ interface EFCConfig {
   cors?: boolean | CorsConfig;      // default true
   requestTimeout?: number;          // ms → 408
   logging?: LoggingConfig | false;
+  cache?: { backend: 'redis'; url?: string; prefix?: string; timeout?: number }
+        | { backend: 'memory'; prefix?: string; maxEntries?: number } | false;
   globalMiddlewares?: RequestHandler[];
   onWorkerReady?: (id: number) => void;
   onWorkerCrash?: (id: number, code: number) => void;
@@ -185,6 +198,10 @@ function revokeToken(res: Response): void
 
 // Return token string (localStorage strategy)
 async function signToken(payload: Record<string, unknown>): Promise<string>
+
+// Need ignite({ cache }). Every signed token carries jti + iat + efc_iat (ms).
+async function revokeSession(req: Request, res?: Response): Promise<void>   // denylist this token until exp
+async function revokeAllSessions(userId: string | number): Promise<void>     // reject tokens issued before now
 
 // Express middleware — verifies JWT, attaches payload to req.user.
 // Dual-purpose: bare it's just auth; called with role names it returns a

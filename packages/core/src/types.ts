@@ -22,6 +22,24 @@ export interface TaskConfig {
   queue?: string;
 }
 
+export type CacheConfig =
+  | {
+      backend: 'redis';
+      /** Default: redis://localhost:6379. Supports rediss://, ACL users and /db. */
+      url?: string;
+      /** Key prefix, so apps can share one Redis. Default: 'efc:'. */
+      prefix?: string;
+      /** Per-command timeout in ms before treating Redis as unavailable. Default: 1000. */
+      timeout?: number;
+    }
+  | {
+      /** Per-process — each cluster worker gets its own. For development and tests. */
+      backend: 'memory';
+      prefix?: string;
+      /** Least-recently-used entries are evicted beyond this. Default: 10 000. */
+      maxEntries?: number;
+    };
+
 export interface LoggingConfig {
   /** Minimum level to emit. Default: 'info'. */
   level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
@@ -55,6 +73,11 @@ export interface EFCConfig {
   workers?: number;
   tasks?: TaskConfig | false;
   cors?: boolean | CorsConfig;
+  /**
+   * Key/value cache (`cache`, `cacheResponse`) — and the store `requireAuth` checks
+   * for revoked sessions (`revokeSession`, `revokeAllSessions`).
+   */
+  cache?: CacheConfig | false;
   /** Structured logging (pino). `false` silences framework logs. */
   logging?: LoggingConfig | false;
   /** Request timeout in milliseconds. Requests exceeding this duration will be terminated with 408. */
