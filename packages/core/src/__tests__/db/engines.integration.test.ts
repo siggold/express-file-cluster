@@ -304,6 +304,64 @@ for (const engine of ['mongodb', 'postgresql'] as const) {
       expect(await Book.findOne({ isbn: '042-1042' })).toBeNull();
     });
 
+    it('handles edge filters and dotted updates the same way', async () => {
+      const Edge = defineModel<{
+        tags: string[];
+        at: Date;
+        n: number;
+        meta: { counts?: { views?: number }; note?: string; list?: string[] };
+      }>(`Edge${suffix}`, {
+        tags: { type: 'array', of: 'string' },
+        at: { type: 'date' },
+        n: { type: 'number' },
+        meta: {
+          counts: { views: { type: 'number', min: 0 } },
+          note: { type: 'string', required: true },
+          list: { type: 'array', of: 'string' },
+        },
+      });
+      await Edge.sync();
+      const a = await Edge.create({
+        tags: ['x', 'y'],
+        at: new Date('2026-01-01'),
+        n: 1,
+        meta: { note: 'hi' },
+      });
+      await Edge.create({ tags: ['z'], at: new Date('2026-06-01'), n: 2, meta: { note: 'yo' } });
+      const count = (f: object) => Edge.count(f as never);
+
+      expect(await count({ tags: { $ne: 'x' } })).toBe(1);
+      expect(await count({ tags: { $nin: ['x', 'q'] } })).toBe(1);
+      expect(await count({ at: { $gt: '2026-03-01' } })).toBe(1);
+      expect(await count({ at: '2026-01-01T00:00:00.000Z' })).toBe(1);
+
+      // Missing parents are created; several dotted writes to one object compose.
+      const u = await Edge.update(a.id, {
+        $set: { 'meta.counts.views': 5, 'meta.list': ['a'] },
+        $inc: { n: 1 },
+      } as never);
+      expect(u).toMatchObject({ n: 2, meta: { note: 'hi', counts: { views: 5 }, list: ['a'] } });
+
+      const v = await Edge.update(a.id, {
+        $inc: { 'meta.counts.views': 2 },
+        $push: { 'meta.list': { $each: ['b', 'c'] } },
+      } as never);
+      expect(v).toMatchObject({ meta: { counts: { views: 7 }, list: ['a', 'b', 'c'] } });
+
+      const w = await Edge.update(a.id, { $pull: { 'meta.list': 'b' } } as never);
+      expect(w?.meta.list).toEqual(['a', 'c']);
+
+      // Dotted writes are validated against the nested schema.
+      await expect(
+        Edge.update(a.id, { $set: { 'meta.counts.views': -1 } } as never),
+      ).rejects.toBeInstanceOf(ModelValidationError);
+      await expect(
+        Edge.update(a.id, { $unset: { 'meta.note': true } } as never),
+      ).rejects.toBeInstanceOf(ModelValidationError);
+      expect((await Edge.findById(a.id))?.meta.note).toBe('hi');
+      await Edge.drop();
+    });
+
     it('drop() removes the collection/table and is safe to repeat', async () => {
       const Temp = defineModel<{ x: string }>(`Temp${suffix}`, { x: { type: 'string' } });
       await Temp.sync();

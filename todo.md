@@ -179,6 +179,16 @@ Every item below is covered by tests that run in CI (MongoDB, MongoDB replica se
 - [x] Driver loaders reported every import failure as "not installed"; now only genuinely missing modules.
 - [x] Scaffolder: PostgreSQL + pg-boss selectable again; ~550 lines of Drizzle stubs removed (generated code is engine-agnostic); init migration; `db:*` scripts; REDIS_URL only for BullMQ.
 
+### Double-check findings (2026-10-11)
+
+A second full pass — every todo item re-verified against the code, plus the paths no test covered — found and fixed:
+
+- [x] **JavaScript projects never worked**: generated `efc.config.js` contained TypeScript syntax; `efc start dev` required tsx (not installed in JS projects); `efc build prod` failed because tsup can't load without typescript. Now: JSDoc-typed config, `node --watch` dev mode, and the build copies JS as-is. New `node --check` unit test over every generated JS file, and a JavaScript stack in the e2e.
+- [x] **PostgreSQL update/filter parity gaps**: dotted `$unset` was silently ignored; two dotted `$set`s on one object overwrote each other; dotted `$inc`/`$push`/`$pull` errored; missing parent objects weren't created; dotted writes weren't validated; `$ne`/`$nin` on array fields errored. All fixed and covered by a new conformance case on both engines.
+- [x] **Studio DNS-rebinding guard**: non-loopback `Host` headers are refused (403).
+- [x] e2e now also covers `efc start dev` and `efc db status --dist` on every stack, with an isolated database per stack.
+- [x] Stale references to the removed `usage/` app removed from CLAUDE.md, the contributing guide and the Skills card.
+
 ### Not done — deliberately out of scope (and the late addition)
 
 - [x] **Redis adapter (cache + session store)** — from plan.md's Phase 2 table, added 2026-10-10: `ignite({ cache })` with Redis or memory backends, `cache` API (`get/set/has/del/wrap/clear`), `cacheResponse()` middleware, and JWT session revocation (`revokeSession`, `revokeAllSessions`) enforced by `requireAuth`. Redis outages degrade to misses for cache calls; revocation checks reject with 503 by default (`onRevocationCheckError: 'allow'` to pass), revoke calls fail loudly. The memory backend lives in the cluster primary and workers share it over IPC. Scaffolded apps configure a cache (Redis if `REDIS_URL`, else memory), log out with `revokeSession` and revoke all sessions on password reset (`integration/cache.test.ts`, `integration/cluster.test.ts`, e2e logout replay on both stacks).

@@ -203,6 +203,21 @@ export default async function seed() { await Note.createMany([{ title: 'a' }, { 
           405,
         );
         expect((await fetch(url)).headers.get('content-type')).toMatch(/text\/html/);
+        // DNS-rebinding guard: a non-loopback Host header is refused.
+        const { request: httpRequest } = await import('node:http');
+        const rebound = await new Promise<number>((resolve, reject) => {
+          const req = httpRequest(
+            `${url}/api/collections`,
+            { headers: { host: 'evil.example:4983' } },
+            (r) => {
+              r.resume();
+              resolve(r.statusCode ?? 0);
+            },
+          );
+          req.once('error', reject);
+          req.end();
+        });
+        expect(rebound).toBe(403);
       } finally {
         child.kill('SIGTERM');
         await new Promise((r) => child.once('exit', r));

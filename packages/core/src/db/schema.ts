@@ -332,3 +332,32 @@ export function sequenceFields(name: string, tree: SchemaTree): { path: string; 
   }
   return out;
 }
+
+/** The schema node a dotted path points at (`meta.counts.views`, `items.0.sku`), if any. */
+export function nodeAt(tree: SchemaTree, path: string[]): FieldNode | undefined {
+  let node: FieldNode | undefined = tree[path[0]!];
+  for (const part of path.slice(1)) {
+    if (!node) return undefined;
+    if (node.kind === 'object') node = node.fields[part];
+    else if (node.kind === 'array' && /^\d+$/.test(part)) node = node.item;
+    else if (node.kind === 'json')
+      return node; // untyped JSON: anything goes below here
+    else return undefined;
+  }
+  return node;
+}
+
+/** Validates one value written to a dotted path (partial-update rules). */
+export async function validateAtPath(
+  tree: SchemaTree,
+  dotted: string,
+  value: unknown,
+  issues: FieldIssue[],
+): Promise<void> {
+  const node = nodeAt(tree, dotted.split('.'));
+  if (!node) {
+    issues.push({ path: dotted, message: 'unknown field' });
+    return;
+  }
+  await validateNode(node, value, dotted, issues, true);
+}

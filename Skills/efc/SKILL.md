@@ -34,7 +34,6 @@ Load **only** the module the work points to. Each is self-contained.
 <repo root>/
   packages/core/src/      ← framework source
   packages/create-efc-app/src/  ← scaffolder
-  usage/                  ← example app
   docs/                   ← full documentation
 ```
 

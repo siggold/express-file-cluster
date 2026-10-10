@@ -9,6 +9,8 @@ import {
   sequenceFields,
   timestampFields,
   validateTree,
+  validateAtPath,
+  nodeAt,
   type FieldIssue,
   type FieldNode,
   type SchemaTree,
@@ -182,7 +184,15 @@ export function pgModel<T extends object>(
           parts.push(eqCond(v));
           break;
         case '$ne':
-          parts.push(v === null ? sql`${e} is not null` : sql`(${e} is null or ${e} <> ${val})`);
+          if (v === null) parts.push(sql`${e} is not null`);
+          else if (kind === 'jsonb' && !jsonPath) {
+            // Array fields: "does not contain" (MongoDB semantics); objects: not equal.
+            parts.push(
+              Array.isArray(v) || (typeof v === 'object' && !(v instanceof Date))
+                ? sql`(${col} is null or ${col} <> ${JSON.stringify(v)}::jsonb)`
+                : sql`(${col} is null or not (${col} @> ${JSON.stringify([v])}::jsonb))`,
+            );
+          } else parts.push(sql`(${e} is null or ${e} <> ${val})`);
           break;
         case '$gt':
           parts.push(sql`${e} > ${val}`);
@@ -213,7 +223,11 @@ export function pgModel<T extends object>(
                   list.map((x) => sql`${x}`),
                   sql`, `,
                 )})`;
-          parts.push(op === '$in' ? sql`(${inList})` : sql`not (${inList})`);
+          parts.push(
+            op === '$in'
+              ? sql`(${inList})`
+              : sql`(${kind === 'jsonb' && !jsonPath ? sql`${col} is null or ` : sql``}not (${inList}))`,
+          );
           break;
         }
         case '$exists':
@@ -360,9 +374,6 @@ export function pgModel<T extends object>(
   async function buildSet(update: AnyRecord): Promise<AnyRecord> {
     const { t, sql } = await compile();
     const ops = update as Record<string, AnyRecord | undefined>;
-    const plain: AnyRecord = {};
-    for (const [k, v] of Object.entries(update)) if (!k.startsWith('$')) plain[k] = v;
-    const $set = { ...(ops['$set'] ?? {}), ...plain };
     for (const op of Object.keys(update).filter((k) => k.startsWith('$'))) {
       if (!['$set', '$unset', '$inc', '$push', '$pull'].includes(op)) {
         throw new ModelValidationError(name, [
@@ -370,42 +381,103 @@ export function pgModel<T extends object>(
         ]);
       }
     }
+    const plain: AnyRecord = {};
+    for (const [k, v] of Object.entries(update)) if (!k.startsWith('$')) plain[k] = v;
+    const $set: AnyRecord = { ...(ops['$set'] ?? {}), ...plain };
 
+    // Validate: top-level fields with the partial-update rules, dotted paths against the
+    // schema node they target (MongoDB's runValidators covers both on that engine).
+    const issues: FieldIssue[] = [];
     const topLevel: AnyRecord = {};
-    const nested: [string, unknown][] = [];
-    for (const [k, v] of Object.entries($set)) {
-      if (k.includes('.')) nested.push([k, v]);
-      else topLevel[k] = v;
-    }
-    const unset = Object.keys(ops['$unset'] ?? {});
-    const toValidate: AnyRecord = { ...topLevel };
-    for (const k of unset) toValidate[k] = null;
-    await validate(toValidate, true);
-
-    const set: AnyRecord = {};
-    for (const [k, v] of Object.entries(topLevel)) set[k] = toDb(k, v);
-    for (const k of unset) set[k] = null;
-    for (const [path, v] of nested) {
-      const [field, ...rest] = path.split('.');
-      const col = columnFor(t, field!);
-      set[field!] =
-        sql`jsonb_set(coalesce(${col}, '{}'::jsonb), ${`{${rest.join(',')}}`}, ${JSON.stringify(v)}::jsonb, true)`;
+    for (const [k, v] of Object.entries($set)) if (!k.includes('.')) topLevel[k] = v;
+    for (const k of Object.keys(ops['$unset'] ?? {})) if (!k.includes('.')) topLevel[k] = null;
+    for (const [k, v] of Object.entries($set))
+      if (k.includes('.')) await validateAtPath(tree, k, v, issues);
+    for (const k of Object.keys(ops['$unset'] ?? {})) {
+      if (k.includes('.')) await validateAtPath(tree, k, null, issues);
     }
     for (const [k, by] of Object.entries(ops['$inc'] ?? {})) {
-      set[k] = sql`coalesce(${columnFor(t, k)}, 0) + ${by as number}`;
+      if (typeof by !== 'number') issues.push({ path: k, message: '$inc needs a number' });
+      const node = k.includes('.') ? nodeAt(tree, k.split('.')) : tree[k];
+      if (node && !(node.kind === 'scalar' && node.type === 'number') && node.kind !== 'json') {
+        issues.push({ path: k, message: '$inc only applies to number fields' });
+      }
     }
-    for (const [k, v] of Object.entries(ops['$push'] ?? {})) {
-      const items =
+    if (issues.length) throw new ModelValidationError(name, issues);
+    await validate(topLevel, true);
+
+    // Each touched column gets one expression; dotted operations on the same jsonb column
+    // compose onto it in order instead of overwriting each other.
+    const set: AnyRecord = {};
+    const nested = new Map<string, unknown>();
+    const touchedTop = new Set<string>();
+    const acc = (field: string) => (nested.get(field) ?? columnFor(t, field)) as unknown;
+    const conflict = (path: string) => {
+      throw new ModelValidationError(name, [{ path, message: 'conflicting update paths' }]);
+    };
+    const top = (field: string, value: unknown) => {
+      if (touchedTop.has(field) || nested.has(field)) conflict(field);
+      touchedTop.add(field);
+      set[field] = value;
+    };
+    // jsonb_set only creates the last key of a path; build missing parents first, as MongoDB does.
+    const withParents = (base: unknown, parts: string[]) => {
+      let expr = sql`coalesce(${base}, '{}'::jsonb)`;
+      for (let i = 1; i < parts.length; i++) {
+        const prefix = `{${parts.slice(0, i).join(',')}}`;
+        expr = sql`jsonb_set(${expr}, ${prefix}, coalesce(${expr} #> ${prefix}, '{}'::jsonb), true)`;
+      }
+      return expr;
+    };
+    const dotted = (path: string, apply: (base: unknown, jsonPath: string) => unknown) => {
+      const [field, ...rest] = path.split('.');
+      if (touchedTop.has(field!)) conflict(path);
+      columnFor(t, field!);
+      const base = withParents(acc(field!), rest);
+      nested.set(field!, apply(base, `{${rest.join(',')}}`));
+    };
+    const items = (v: unknown) =>
+      JSON.stringify(
         v != null && typeof v === 'object' && '$each' in (v as AnyRecord)
           ? (v as { $each: unknown[] }).$each
-          : [v];
-      set[k] = sql`coalesce(${columnFor(t, k)}, '[]'::jsonb) || ${JSON.stringify(items)}::jsonb`;
+          : [v],
+      );
+
+    for (const [k, v] of Object.entries($set)) {
+      if (k.includes('.'))
+        dotted(k, (b, p) => sql`jsonb_set(${b}, ${p}, ${JSON.stringify(v)}::jsonb, true)`);
+      else top(k, toDb(k, v));
+    }
+    for (const k of Object.keys(ops['$unset'] ?? {})) {
+      if (k.includes('.')) dotted(k, (b, p) => sql`(${b} #- ${p})`);
+      else top(k, null);
+    }
+    for (const [k, by] of Object.entries(ops['$inc'] ?? {})) {
+      if (k.includes('.')) {
+        dotted(
+          k,
+          (b, p) =>
+            sql`jsonb_set(${b}, ${p}, to_jsonb(coalesce((${b} #>> ${p})::double precision, 0) + ${by as number}), true)`,
+        );
+      } else top(k, sql`coalesce(${columnFor(t, k)}, 0) + ${by as number}`);
+    }
+    for (const [k, v] of Object.entries(ops['$push'] ?? {})) {
+      if (k.includes('.')) {
+        dotted(
+          k,
+          (b, p) =>
+            sql`jsonb_set(${b}, ${p}, coalesce(${b} #> ${p}, '[]'::jsonb) || ${items(v)}::jsonb, true)`,
+        );
+      } else top(k, sql`coalesce(${columnFor(t, k)}, '[]'::jsonb) || ${items(v)}::jsonb`);
     }
     for (const [k, v] of Object.entries(ops['$pull'] ?? {})) {
-      const col = columnFor(t, k);
-      set[k] =
-        sql`coalesce((select jsonb_agg(e) from jsonb_array_elements(${col}) e where e <> ${JSON.stringify(v)}::jsonb), '[]'::jsonb)`;
+      const without = (arr: unknown) =>
+        sql`coalesce((select jsonb_agg(e) from jsonb_array_elements(${arr}) e where e <> ${JSON.stringify(v)}::jsonb), '[]'::jsonb)`;
+      if (k.includes('.'))
+        dotted(k, (b, p) => sql`jsonb_set(${b}, ${p}, ${without(sql`(${b} #> ${p})`)}, true)`);
+      else top(k, without(columnFor(t, k)));
     }
+    for (const [field, expr] of nested) set[field] = expr;
     if (ts.updatedAt) set[ts.updatedAt] = new Date();
     return set;
   }

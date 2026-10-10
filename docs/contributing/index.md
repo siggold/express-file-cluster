@@ -6,8 +6,8 @@
 packages/
   core/              → express-file-cluster  (the framework)
   create-efc-app/    → interactive scaffolder CLI
-usage/               → example app used for manual testing
-client/              → minimal frontend for the example app
+client/              → marketing site (static HTML/JS)
+Skills/efc/          → reference cards for the /efc assistant skill
 ```
 
 ---
@@ -36,18 +36,26 @@ npm run lint
 
 ---
 
-## Running the example app
+## Integration and end-to-end tests
 
-The `usage/` directory is a self-contained EFC application wired against the local `packages/core` build. Use it for end-to-end manual testing.
+Integration tests skip themselves when a service isn't reachable, so `npm test` works with nothing running — but for full coverage start MongoDB (plus a single-node replica set for transactions), Redis and PostgreSQL, and point the tests at them:
+
+| Variable | Default |
+|---|---|
+| `EFC_TEST_MONGO_URL` | `mongodb://127.0.0.1:27017/...` |
+| `EFC_TEST_MONGO_RS_URL` | `mongodb://127.0.0.1:27018/...?replicaSet=rs0&directConnection=true` |
+| `EFC_TEST_REDIS_URL` | `redis://127.0.0.1:6379/15` |
+| `EFC_TEST_PG_URL` | `postgres://postgres@127.0.0.1:5433/efc_test` |
+
+The cluster and CLI tests run the built `dist/`, so `npm run build` first.
+
+The scaffolder end-to-end suite generates real projects (MongoDB + BullMQ, PostgreSQL + pg-boss, and a JavaScript project), installs them against a packed tarball of `packages/core`, then migrates, runs the dev server, builds, boots and exercises auth over HTTP:
 
 ```bash
-cd usage
-cp .env.example .env   # fill in DATABASE_URL, JWT_SECRET, REDIS_URL
-npm install
-npm run dev            # efc start dev
+npm run build
+EFC_E2E=1 npx vitest run --project create-efc-app e2e
+EFC_E2E=1 EFC_E2E_KEEP=1 npx vitest run --project create-efc-app e2e   # keep the generated apps to inspect
 ```
-
-The `client/` directory at the repo root is a minimal HTML/JS frontend that calls the usage app's API.
 
 ---
 

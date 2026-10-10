@@ -26,8 +26,9 @@ A backend framework called **express-file-cluster** (`express-file-cluster` on n
 ```
 packages/core/src/       ← framework source (express-file-cluster)
 packages/create-efc-app/ ← npx create-efc-app scaffolder
-usage/                   ← example app (manual testing)
 docs/                    ← documentation
+client/                  ← marketing site (static)
+Skills/efc/              ← dense reference cards (/efc skill)
 ```
 
 ---

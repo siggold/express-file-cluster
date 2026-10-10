@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'fs-extra';
+import { execFileSync } from 'node:child_process';
 import { scaffold, NO_ADMIN_FEATURES, NO_USER_FEATURES } from '../scaffold.js';
 import type { ScaffoldOptions } from '../scaffold.js';
 
@@ -62,3 +63,47 @@ describe('scaffold() — generated entrypoint cluster behavior', () => {
     expect(content).toMatch(/cluster:\s*false/);
   });
 });
+
+describe('scaffold() — JavaScript projects', () => {
+  // JS output was once untested and shipped TypeScript syntax in efc.config.js. Parse
+  // every generated file with node --check, with every feature switched on.
+  it('generates only syntactically valid JavaScript', async () => {
+    const dest = tmpDest('js-syntax');
+    const every = <T extends object>(flags: T): T =>
+      Object.fromEntries(Object.keys(flags).map((k) => [k, true])) as T;
+    await scaffold({
+      ...baseOptions(dest, true),
+      language: 'javascript',
+      database: 'postgresql',
+      taskBackend: 'pg-boss',
+      userPortal: true,
+      adminPortal: true,
+      rbac: true,
+      userFeatures: every(NO_USER_FEATURES),
+      adminFeatures: every(NO_ADMIN_FEATURES),
+    });
+
+    const files: string[] = [path.join(dest, 'efc.config.js')];
+    const walk = (dir: string) => {
+      for (const f of fs.readdirSync(dir)) {
+        const p = path.join(dir, f);
+        if (fs.statSync(p).isDirectory()) walk(p);
+        else files.push(p);
+      }
+    };
+    walk(path.join(dest, 'src'));
+
+    expect(files.filter((f) => f.endsWith('.ts'))).toEqual([]);
+    const broken = files.filter((f) => {
+      try {
+        execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' });
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(broken.map((f) => path.relative(dest, f))).toEqual([]);
+    expect(files.length).toBeGreaterThan(50);
+  }, 60_000);
+});
+

@@ -134,6 +134,12 @@ export function startStudio(
   const server = http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      // Loopback binding alone doesn't stop DNS rebinding (a web page re-pointing its own
+      // hostname at 127.0.0.1), so only answer requests addressed to a loopback host.
+      const host = (req.headers.host ?? '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+      if (!['localhost', '127.0.0.1', '::1'].includes(host)) {
+        return json(res, 403, { error: 'Studio only answers on localhost' });
+      }
       if (req.method !== 'GET') return json(res, 405, { error: 'Studio is read-only' });
       if (url.pathname === '/') {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

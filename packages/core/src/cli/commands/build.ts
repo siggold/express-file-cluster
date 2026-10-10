@@ -104,15 +104,36 @@ function buildProd(): void {
   });
 }
 
+// JavaScript projects need no transpiling (tsup can't even load without typescript
+// installed): mirror src/ and efc.config.js into dist/ with the same layout tsup
+// would produce, so `efc start prod` and `efc db --dist` find the same paths.
+function copyJsProject(cwd: string): void {
+  const dist = path.join(cwd, 'dist');
+  fs.rmSync(dist, { recursive: true, force: true });
+  fs.cpSync(path.join(cwd, 'src'), path.join(dist, 'src'), {
+    recursive: true,
+    filter: (src) => !/(\.test\.[cm]?js$|[\\/]__tests__([\\/]|$))/.test(src),
+  });
+  for (const f of ['efc.config.js', 'efc.config.mjs']) {
+    if (fs.existsSync(path.join(cwd, f))) fs.copyFileSync(path.join(cwd, f), path.join(dist, f));
+  }
+  console.log(pc.green('[EFC] Build complete → dist/ (JavaScript copied as-is)'));
+}
+
 function transpile(): void {
   let tsupArgs: string[];
+  const cwd = process.cwd();
   if (hasTsupConfig()) {
     tsupArgs = [];
   } else {
-    const cwd = process.cwd();
-    if (!['index.ts', 'index.js'].some((f) => fs.existsSync(path.join(cwd, 'src', f)))) {
+    const hasTs = fs.existsSync(path.join(cwd, 'src', 'index.ts'));
+    if (!hasTs && !fs.existsSync(path.join(cwd, 'src', 'index.js'))) {
       console.error(pc.red('[EFC] Could not find entry point. Expected src/index.ts'));
       process.exit(1);
+      return;
+    }
+    if (!hasTs && !findTsConfig()) {
+      copyJsProject(cwd);
       return;
     }
     tsupArgs = ['--config', writeAppTsupConfig(cwd)];

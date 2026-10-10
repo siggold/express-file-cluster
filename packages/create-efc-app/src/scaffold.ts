@@ -135,10 +135,10 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
 
   const devDeps: Record<string, string> = {
     vitest: '^5.0.3',
-    // `efc build prod` transpiles src/ into dist/ with tsup for JS projects too.
-    tsup: '^8.2.0',
   };
   if (opts.language === 'typescript') {
+    // JavaScript projects need neither: `efc build prod` copies them, `efc start dev` uses node --watch.
+    devDeps['tsup'] = '^8.2.0';
     devDeps['typescript'] = '^5.5.0';
     devDeps['@types/node'] = '^22.0.0';
     devDeps['@types/express'] = '^4.17.21';
@@ -200,16 +200,20 @@ async function writeEfcConfig(dest: string, opts: ScaffoldOptions): Promise<void
       ? `{ backend: 'pg-boss', concurrency: 5 }`
       : `{ backend: 'bullmq', concurrency: 5, redisUrl: process.env.REDIS_URL }`;
 
-  const content = `import type { EFCConfig } from 'express-file-cluster';
-
-// The framework never reads process.env itself — every runtime value it needs is read
+  const ts = opts.language === 'typescript';
+  // JavaScript gets a JSDoc type instead of TypeScript syntax, so editors still check it.
+  const typeImport = ts ? "import type { EFCConfig } from 'express-file-cluster';\n\n" : '';
+  const declaration = ts
+    ? 'const config: EFCConfig = {'
+    : "/** @type {import('express-file-cluster').EFCConfig} */\nconst config = {";
+  const content = `${typeImport}// The framework never reads process.env itself — every runtime value it needs is read
 // here, explicitly, and passed in. Edit .env to change values; edit this file to change
 // which env vars are wired up or add new ones.
 const corsOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
   : undefined;
 
-const config: EFCConfig = {
+${declaration}
   port: process.env.PORT ? Number(process.env.PORT) : undefined,
   databaseUrl: process.env.DATABASE_URL,
   jwtSecret: process.env.JWT_SECRET,

@@ -10,7 +10,7 @@ import type { AdminFeatures, UserFeatures } from '../scaffold.js';
 
 // Full scaffold flow, the way a user runs it: scaffold with the interactive defaults →
 // npm install (against a packed tarball of the local core, not the registry) →
-// `efc db migrate` → `efc build prod` → boot → real HTTP, for both stacks. Slow and needs
+// `efc db migrate` → `efc start dev` → `efc build prod` → boot → real HTTP, for every stack. Slow and needs
 // network plus MongoDB, Redis and PostgreSQL, so it only runs with EFC_E2E=1 (the `e2e`
 // CI job sets it).
 const RUN = process.env['EFC_E2E'] === '1';
@@ -18,10 +18,45 @@ const MONGO_URL = process.env['EFC_TEST_MONGO_URL'] ?? 'mongodb://127.0.0.1:2701
 const PG_URL = process.env['EFC_TEST_PG_URL'] ?? 'postgres://postgres@127.0.0.1:5433/efc_e2e';
 
 // Both supported stacks, each scaffolded with the interactive defaults otherwise.
+// Each Postgres stack gets its own database (created fresh in beforeAll), so one stack's
+// leftovers — e.g. a run kept with EFC_E2E_KEEP=1 — can't leak into another.
+const pgDb = (name: string) => PG_URL.replace(/\/[^/?]*(\?|$)/, `/${name}$1`);
 const STACKS = [
-  { label: 'MongoDB + BullMQ', database: 'mongodb', taskBackend: 'bullmq', url: MONGO_URL },
-  { label: 'PostgreSQL + pg-boss', database: 'postgresql', taskBackend: 'pg-boss', url: PG_URL },
+  {
+    label: 'MongoDB + BullMQ',
+    language: 'typescript',
+    database: 'mongodb',
+    taskBackend: 'bullmq',
+    url: MONGO_URL,
+  },
+  {
+    label: 'PostgreSQL + pg-boss',
+    language: 'typescript',
+    database: 'postgresql',
+    taskBackend: 'pg-boss',
+    url: pgDb('efc_e2e_ts'),
+  },
+  {
+    label: 'JavaScript + PostgreSQL',
+    language: 'javascript',
+    database: 'postgresql',
+    taskBackend: 'pg-boss',
+    url: pgDb('efc_e2e_js'),
+  },
 ] as const;
+
+async function freshPostgresDb(url: string): Promise<void> {
+  const { default: pg } = await import('pg');
+  const name = new URL(url).pathname.slice(1);
+  const admin = new pg.Client({ connectionString: url.replace(/\/[^/?]*(\?|$)/, '/postgres$1') });
+  await admin.connect();
+  try {
+    await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE "${name}"`);
+  } finally {
+    await admin.end();
+  }
+}
 const CORE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core');
 
 const all = <T extends object>(flags: T): T =>
@@ -49,6 +84,7 @@ describe.skipIf(!RUN).each(STACKS)('create-efc-app — end to end ($label)', (st
   let out = '';
 
   beforeAll(async () => {
+    if (stack.database === 'postgresql') await freshPostgresDb(stack.url);
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'efc-e2e-'));
     appDir = path.join(workDir, 'my-api');
 
@@ -60,7 +96,7 @@ describe.skipIf(!RUN).each(STACKS)('create-efc-app — end to end ($label)', (st
     // Mirrors the defaults pre-selected in the interactive prompts (src/index.ts).
     await scaffold({
       projectName: appDir,
-      language: 'typescript',
+      language: stack.language,
       database: stack.database,
       authStrategy: 'http-only',
       cluster: true,
@@ -114,11 +150,51 @@ describe.skipIf(!RUN).each(STACKS)('create-efc-app — end to end ($label)', (st
     else if (workDir) console.log(`kept: ${appDir}`);
   });
 
+  it('serves the app with efc start dev', async () => {
+    const port = await freePort();
+    const dev = spawn(path.join(appDir, 'node_modules', '.bin', 'efc'), ['start', 'dev'], {
+      cwd: appDir,
+      env: { ...process.env, PORT: String(port) },
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let devOut = '';
+    dev.stdout!.on('data', (d: Buffer) => (devOut += d.toString()));
+    dev.stderr!.on('data', (d: Buffer) => (devOut += d.toString()));
+    try {
+      const start = Date.now();
+      for (;;) {
+        try {
+          const r = await fetch(`http://127.0.0.1:${port}/v1/api/health`);
+          if (r.ok) break;
+        } catch {
+          /* not listening yet */
+        }
+        if (Date.now() - start > 30_000)
+          throw new Error(`dev server never became healthy\n${devOut}`);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    } finally {
+      if (dev.pid) process.kill(-dev.pid, 'SIGTERM');
+      await new Promise((r) => dev.once('exit', r));
+    }
+  }, 60_000);
+
   it('builds for production with no type errors', () => {
     run(path.join(appDir, 'node_modules', '.bin', 'efc'), ['build', 'prod'], appDir);
     expect(fs.existsSync(path.join(appDir, 'dist', 'src', 'index.js'))).toBe(true);
     expect(fs.existsSync(path.join(appDir, 'dist', 'src', 'api', 'health.js'))).toBe(true);
     expect(fs.existsSync(path.join(appDir, 'dist', 'src', 'tasks', 'SendEmail.js'))).toBe(true);
+    expect(
+      fs.existsSync(path.join(appDir, 'dist', 'src', 'migrations', '00000000000000_init.js')),
+    ).toBe(true);
+    // The documented production path: migrations from compiled dist/ (no tsx in the image).
+    const status = run(
+      path.join(appDir, 'node_modules', '.bin', 'efc'),
+      ['db', 'status', '--dist'],
+      appDir,
+    );
+    expect(status).toMatch(/✓ 00000000000000_init batch 1/);
   }, 120_000);
 
   it('boots the built app and serves health, register, login and the authed /me route', async () => {

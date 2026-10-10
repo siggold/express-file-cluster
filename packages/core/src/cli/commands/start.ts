@@ -85,17 +85,24 @@ function startDev(): void {
 
   const cwd = process.cwd();
   // Walk up from cwd looking for tsx in node_modules/.bin (handles workspace hoisting)
-  function findTsx(): string {
+  function findTsx(): string | undefined {
     let dir = cwd;
     while (true) {
       const candidate = path.join(dir, 'node_modules', '.bin', 'tsx');
       if (fs.existsSync(candidate)) return candidate;
       const parent = path.dirname(dir);
-      if (parent === dir) return 'tsx'; // reached filesystem root, fall back to PATH
+      if (parent === dir) return undefined;
       dir = parent;
     }
   }
   const tsx = findTsx();
+  const isJs = /\.(m?js|cjs)$/.test(entry);
+  if (!tsx && !isJs) {
+    console.error(
+      pc.red('[EFC] tsx is required to run TypeScript in development. Run: npm install -D tsx'),
+    );
+    process.exit(1);
+  }
   const preloadPath = writeDevEnvPreload(cwd);
 
   const env: NodeJS.ProcessEnv = {
@@ -110,7 +117,13 @@ function startDev(): void {
       .join(' '),
   };
 
-  const child = spawn(tsx, ['watch', '--include', 'src', entry], { stdio: 'inherit', env });
+  // JavaScript projects don't install tsx: Node's own watch mode restarts on changes in src/.
+  const child = tsx
+    ? spawn(tsx, ['watch', '--include', 'src', entry], { stdio: 'inherit', env })
+    : spawn(process.execPath, ['--watch', '--watch-path', path.join(cwd, 'src'), entry], {
+        stdio: 'inherit',
+        env,
+      });
   forwardSignals(child);
 }
 
