@@ -10,6 +10,11 @@ export interface TaskConfig {
   concurrency?: number;
   /** Max milliseconds `enqueue()` waits for Redis before rejecting. Default: 5000. */
   enqueueTimeout?: number;
+  /**
+   * Queue name. Apps sharing one Redis database (or Postgres schema, for pg-boss) must
+   * use different names, or they will run each other's jobs. Default: 'efc'.
+   */
+  queue?: string;
 }
 
 export interface LoggingConfig {
@@ -121,7 +126,13 @@ export interface TaskOptions {
   retries?: number;
   backoff?: 'fixed' | 'exponential';
   concurrency?: number;
+  /**
+   * Cron pattern for recurring runs, e.g. `'0 3 * * *'` (daily 03:00). A 6-field
+   * pattern adds seconds. The handler receives `{}` as its payload on scheduled runs.
+   */
   schedule?: string;
+  /** IANA timezone for `schedule`, e.g. `'Europe/Berlin'`. Default: server local time. */
+  timezone?: string;
 }
 
 export interface TaskDefinition<TPayload = unknown> {

@@ -137,6 +137,7 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
         redisUrl: config.tasks.redisUrl ?? 'redis://localhost:6379',
         concurrency: config.tasks.concurrency ?? 5,
         enqueueTimeout: config.tasks.enqueueTimeout ?? 5000,
+        queue: config.tasks.queue ?? 'efc',
       });
     }
   }

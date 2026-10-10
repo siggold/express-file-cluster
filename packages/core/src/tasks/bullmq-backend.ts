@@ -1,6 +1,7 @@
 import type { Job } from 'bullmq';
 import type * as BullMQNS from 'bullmq';
 import { taskRegistry, setEnqueueImpl } from './index.js';
+import type { TaskDefinition } from '../types.js';
 import { runInThread } from './thread-runner.js';
 import { getLogger } from '../logger.js';
 
@@ -8,9 +9,52 @@ interface BullMQOpts {
   redisUrl: string;
   concurrency: number;
   enqueueTimeout: number;
+  queue: string;
 }
 
 let closeImpl: (() => Promise<void>) | null = null;
+let schedulesSynced: Promise<void> = Promise.resolve();
+
+/** Resolves once cron schedulers have been reconciled with the registry (tests, CLI). */
+export function whenSchedulesSynced(): Promise<void> {
+  return schedulesSynced;
+}
+
+export const SCHEDULER_PREFIX = 'efc-cron:';
+
+function jobOptions(def: TaskDefinition) {
+  return {
+    // BullMQ's `attempts` counts the first run; `retries` counts only the re-runs.
+    attempts: (def.options.retries ?? 3) + 1,
+    backoff: { type: def.options.backoff ?? 'exponential', delay: 1000 },
+  };
+}
+
+// One job scheduler per task with a `schedule`, keyed by task name. upsert is
+// idempotent, so every cluster worker can run this without creating duplicates;
+// schedulers whose task lost its `schedule` (or was deleted) are removed.
+async function syncSchedules(queue: BullMQNS.Queue): Promise<void> {
+  const wanted = new Set<string>();
+  for (const def of taskRegistry.values()) {
+    if (!def.options.schedule) continue;
+    const id = SCHEDULER_PREFIX + def.name;
+    wanted.add(id);
+    await queue.upsertJobScheduler(
+      id,
+      {
+        pattern: def.options.schedule,
+        ...(def.options.timezone !== undefined && { tz: def.options.timezone }),
+      },
+      { name: def.name, data: {}, opts: jobOptions(def) },
+    );
+  }
+  for (const s of await queue.getJobSchedulers(0, -1)) {
+    if (s.key.startsWith(SCHEDULER_PREFIX) && !wanted.has(s.key)) {
+      await queue.removeJobScheduler(s.key);
+    }
+  }
+  if (wanted.size > 0) getLogger().info(`Scheduled ${wanted.size} cron task(s)`);
+}
 
 /** Drains the BullMQ worker and closes both Redis connections. No-op if never initialised. */
 export async function closeBullMQ(): Promise<void> {
@@ -31,14 +75,14 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
   // With the offline queue on (ioredis default) queue.add() buffers forever while Redis is
   // down, so enqueue() never settles. Off, commands reject once the connection drops; the
   // initial connect is bounded by the enqueueTimeout race below.
-  const queue = new bullmq.Queue('efc', {
+  const queue = new bullmq.Queue(opts.queue, {
     connection: { ...connection, enableOfflineQueue: false },
   });
   // Without a listener, ioredis connection errors surface as unhandled 'error' events.
   queue.on('error', () => {});
 
   const worker = new bullmq.Worker(
-    'efc',
+    opts.queue,
     async (job: Job) => {
       const def = taskRegistry.get(job.name);
       if (!def) {
@@ -77,16 +121,7 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
       );
     }
 
-    const add = queue.waitUntilReady().then(() =>
-      queue.add(name, payload, {
-        // BullMQ's `attempts` counts the first run; `retries` counts only the re-runs.
-        attempts: (def.options.retries ?? 3) + 1,
-        backoff: {
-          type: def.options.backoff ?? 'exponential',
-          delay: 1000,
-        },
-      }),
-    );
+    const add = queue.waitUntilReady().then(() => queue.add(name, payload, jobOptions(def)));
 
     let timer: NodeJS.Timeout | undefined;
     const timeout = new Promise<never>((_, reject) => {
@@ -113,7 +148,18 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
     }
   });
 
+  let closing = false;
+  // Not awaited: a Redis outage at boot must not block the HTTP server from starting.
+  schedulesSynced = queue
+    .waitUntilReady()
+    .then(() => syncSchedules(queue))
+    .catch((err: unknown) => {
+      // Shutting down before Redis ever answered aborts the wait — not a real failure.
+      if (!closing) getLogger().error({ err }, 'Failed to sync cron task schedules');
+    });
+
   closeImpl = async () => {
+    closing = true;
     await worker.close();
     await queue.close();
   };

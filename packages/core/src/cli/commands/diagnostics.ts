@@ -3,6 +3,8 @@ import { scanDir } from '../../router/scan.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import pc from 'picocolors';
+import { readEnvFile } from '../env.js';
+import { taskAdminCommands } from './task-admin.js';
 
 export function diagnosticsCommands(): Command[] {
   return [routesCommand(), tasksCommand(), doctorCommand()];
@@ -34,7 +36,11 @@ function routesCommand(): Command {
 }
 
 function tasksCommand(): Command {
-  return new Command('tasks').description('List registered background tasks').action(() => {
+  const cmd = new Command('tasks').description(
+    'List background tasks, or inspect the dead-letter queue (failed | retry | purge)',
+  );
+  for (const sub of taskAdminCommands()) cmd.addCommand(sub);
+  return cmd.action(() => {
     const tasksDir = resolveTasksDir();
     if (!tasksDir || !fs.existsSync(tasksDir)) {
       console.log(pc.yellow('No tasks directory found.'));
@@ -53,26 +59,6 @@ function tasksCommand(): Command {
     }
     console.log();
   });
-}
-
-// `efc doctor` runs as a standalone CLI invocation — nothing has loaded .env into
-// process.env yet (that only happens inside `efc start dev`'s spawned child process).
-// Parse .env directly so vars that only live there, not in the shell, are still seen.
-function readEnvFile(cwd: string): Record<string, string> {
-  const envPath = path.join(cwd, '.env');
-  if (!fs.existsSync(envPath)) return {};
-
-  const vars: Record<string, string> = {};
-  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const raw = trimmed.slice(eq + 1).trim();
-    vars[key] = raw.replace(/^(['"])(.*)\1$/, '$2');
-  }
-  return vars;
 }
 
 function doctorCommand(): Command {
