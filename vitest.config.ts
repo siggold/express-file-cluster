@@ -15,6 +15,15 @@ export default defineConfig({
           environment: 'node',
         },
       },
+      {
+        test: {
+          name: 'create-efc-app',
+          root: './packages/create-efc-app',
+          include: ['src/__tests__/**/*.test.ts'],
+          exclude: ['**/node_modules/**', '**/dist/**'],
+          environment: 'node',
+        },
+      },
     ],
   },
 });

@@ -1,6 +1,6 @@
 # EFC — Implementation Checklist
 
-> Status as of June 2026. Based on `plan.md` Phase 1 (Core MVP) target.
+> Status as of 2026-10-10. **Phase 1 (Core MVP) complete** — all exit criteria met and covered by CI.
 
 ---
 
@@ -21,8 +21,8 @@
 - [x] Initialise monorepo (`packages/core`, `packages/create-efc-app`)
 - [x] TypeScript build (`tsup`) + dual CJS/ESM output
 - [x] ESLint + Prettier config
-- [ ] GitHub Actions: lint + test on every PR
-- [ ] `packages/adapters` package scaffold
+- [x] GitHub Actions: lint + typecheck + build + test on every PR (`.github/workflows/ci.yml`)
+- [ ] `packages/adapters` package scaffold — moved to Phase 2 (only needed once a second adapter exists)
 
 ### 1.2 File-Based Router
 
@@ -31,7 +31,7 @@
 - [x] Method dispatching (uppercase export → HTTP verb)
 - [x] Auto `405` for unimplemented verbs
 - [x] Per-route `middlewares[]` injection
-- [ ] Catch-all / wildcard routes (`[...params].ts`) — Phase 2
+- [ ] Catch-all / wildcard routes (`[...params].ts`) — Phase 2 (listed below)
 
 ### 1.3 Clustering
 
@@ -51,8 +51,8 @@
 - [x] `objectId` + `ref` + `.populate()` support
 - [x] Typed arrays (`of`) incl. `objectId` arrays with `ref`
 - [x] Nested array-of-subdocument schemas (`field: [{...}]`) — verified sub-field `required` validation fires correctly
-- [ ] **Schema-level "operator code" defaults** (e.g. `default: '$now'` / `'$uuid'`-style sentinels) — does NOT exist; only raw values or raw functions work as `default`, and function defaults are an undocumented/untyped side effect of `default?: unknown`, not a designed feature
-- [ ] PostgreSQL adapter (`pg` / Drizzle) — Phase 2
+- [x] **Schema-level "operator code" defaults** — `'$now'`, `'$uuid'`, `'$objectId'`, `'$timestamp'`, `'$shortId'`, `'$currentUser[.key]'` (see Review Follow-ups below)
+- [ ] PostgreSQL adapter (`pg` / Drizzle) — Phase 2 (listed below)
 
 ### 1.5 Auth + Errors
 
@@ -69,9 +69,9 @@
 - [x] `taskRegistry` map
 - [x] **`tasksDir` scanner** — auto-import task files on startup, register into `taskRegistry`
 - [x] **BullMQ backend** — wire `setEnqueueImpl` to a real BullMQ queue + worker
-- [ ] pg-boss backend — Phase 2
+- [ ] pg-boss backend — Phase 2 (listed below)
 - [x] `thread: true` → `worker_threads` execution for CPU-bound tasks
-- [ ] Cron/scheduled tasks (`schedule` option on `defineTask`)
+- [ ] Cron/scheduled tasks (`schedule` option on `defineTask`) — Phase 2 (listed below)
 
 ### 1.7 CLI (`efc`)
 
@@ -85,8 +85,8 @@
 - [x] `efc routes` — print resolved route table
 - [x] `efc tasks` — list registered tasks
 - [x] `efc doctor` — validate config, env vars, project setup
-- [ ] `efc db migrate / rollback / seed / studio` — Phase 2
-- [ ] `efc --version` reads from `package.json` at runtime
+- [ ] `efc db migrate / rollback / seed / studio` — Phase 2 (listed below)
+- [x] `efc --version` reads from `package.json` at runtime (was hardcoded `0.1.0`; fixed 2026-10-10)
 
 ### 1.8 Scaffolder (`create-efc-app`)
 
@@ -97,7 +97,7 @@
 - [x] Generates default admin/user panels and auth routes
 - [x] Generates example task (`src/tasks/SendEmail.ts`) when tasks enabled
 - [x] Runs `npm install` after scaffold
-- [ ] End-to-end test of the full scaffold flow
+- [x] End-to-end test of the full scaffold flow — `create-efc-app/src/__tests__/e2e.test.ts`: scaffold (interactive defaults) → `npm install` → `efc build prod` → clustered boot → health / register / login / `/me` → graceful SIGTERM. CI `e2e` job on Node 22 + 24 (2026-10-10)
 
 ### 1.9 Testing
 
@@ -108,20 +108,20 @@
 - [x] Unit tests: `ignite()` (`ignite.test.ts`)
 - [x] Unit tests: `defineModel` schema compilation — enum / nested-array / defaults / all `$`-operator codes / `ModelOptions.timestamps` (`db/model.smoke.test.ts`, added + expanded 2026-07-19) — schema-only, no live DB needed
 - [x] Integration: `defineModel` against a real local MongoDB — sequence/`$increment`, `$currentUser`, `update()` (`db/model.integration.test.ts`, added 2026-07-19) — self-skips when Mongo isn't reachable; 7 files / 45 tests total as of this update
-- [ ] Integration: static / index / dynamic route resolution
-- [ ] Integration: clustering respawn
-- [ ] Integration: task enqueue → process → retry
-- [ ] Integration: auth middleware (issue + verify + revoke)
+- [x] Integration: static / index / dynamic route resolution, static-before-dynamic precedence, file-level middlewares, default `basePath` (`integration/routes.test.ts`, 2026-10-10)
+- [x] Integration: clustering respawn + graceful shutdown, both process-group and primary-only SIGTERM (`integration/cluster.test.ts`, 2026-10-10)
+- [x] Integration: task enqueue → process → retry → dead-letter, plus fail-fast when Redis is down (`integration/tasks.test.ts`, 2026-10-10)
+- [x] Integration: auth middleware through `ignite()` — issue + verify + revoke, role enforcement, wrong-secret rejection (`integration/auth.test.ts`, 2026-10-10)
 
 ---
 
-## Phase 1 Exit Criteria (not yet met)
+## Phase 1 Exit Criteria — met 2026-10-10
 
-- [ ] `npx create-efc-app` works end-to-end without manual steps
+- [x] `npx create-efc-app` works end-to-end without manual steps (CI `e2e` job)
 - [x] `efc start dev` serves routes (binary wired, tsx delegation works)
 - [x] `enqueue('SendEmail', …)` runs off the request path with retries
 - [x] Clustering spawns correct worker count and respawns on crash
-- [ ] `efc run tests` is green in CI
+- [x] `efc run tests` is green in CI
 
 ---
 
@@ -138,9 +138,9 @@ Verified with real repros against the built package (not just reading code) whil
 - [x] Fixed a drive-by mongoose deprecation warning (`{ new: true }` → `{ returnDocument: 'after' }`) in both the new `nextSequence` counter helper and the pre-existing `update()` CRUD method, discovered while adding the sequence feature. Added an `update()` integration test — previously untested against a live DB. (Fixed 2026-07-19)
 - [x] **Updated the marketing site's "Workspace" demo** (`client/workspace.js`) — its `FILES` object hardcodes its own copy of the model/route source shown in the simulated IDE (per its own header comment, "verbatim from /usage"), and was stale relative to `usage/` itself. Retrofitted the new features into natural, non-contrived spots: `User.verifyToken` and `Session.token` → `default: '$uuid'` (dropped the now-redundant manual `crypto.randomBytes()` calls in `register.ts`); `Admin` gained `adminNumber` (`sequence: true`) and `createdBy` (`default: '$currentUser.id'`), and `admin/admins/index.ts`'s `GET`/`POST` handlers were turned from TODO-stubs into real `Admin.find()`/`.create()` calls — the natural real-world case for both features together; `Role` demonstrates `ModelOptions.timestamps: false` paired with an explicit `createdOn: { default: '$now' }` field (the one non-redundant use of `$now`, only meaningful once auto-timestamps are off). Added a terminal-demo curl example showing the new response fields. Deliberately did **not** force `$objectId`/`$timestamp`/`$shortId` in — no natural fit found in this app's models; forcing them in would've meant contrived justifications. Every snippet was verified against the real framework over live HTTP requests before going in (not just checked for valid JS/HTML). (Updated 2026-07-19)
 - [x] **Version bump**: `packages/core/package.json` `0.3.12` → `0.3.14` (checked `npm view express-file-cluster version` first — registry was already at `0.3.13`, one ahead of this repo's local `package.json`, so bumped to `0.3.14` to avoid a publish collision, not to `0.3.13`). `packages/create-efc-app` was **not** bumped — untouched this session — but note it has the same one-patch drift (local `0.4.12` vs published `0.4.13`); `publish.yml`'s "fail loudly if already published" guard will catch it if someone tries to publish before bumping. Synced version strings in `client/index.html` (hero badge + new changelog entry), `client/workspace.html` (status-bar chip), and `client/workspace.js` (demo `package.json`'s `express-file-cluster` dependency). Deliberately did **not** touch `README.md`, `packages/core/README.md`, `CLAUDE.md`, `docs/index.md`, or `Skills/efc/SKILL.md` — all still say "v0.3.10" (already stale before this session, flagged but out of scope; only `/client` was requested). (2026-07-19)
-- [ ] **BullMQ `enqueue()` hangs indefinitely when Redis is unreachable** — reproduced: `enqueue('ValidTask', payload)` against an unreachable Redis never resolves or rejects (tested past 5s with no timeout). Unknown task names still fail fast (registry check is synchronous, unaffected). Not a crash — BullMQ/ioredis retry quietly in the background — but there's no fail-fast/circuit-breaker option, and nothing in the docs warns callers their request may hang. Explicitly deferred by product decision on 2026-07-19; revisit before Phase 1 exit.
-- [ ] Note: `mongoose` peer dependency range is `>=8.0.0` but the pinned devDependency is `^9.7.2`; `validateSync()` already emits a v10-deprecation warning under v9.7.2 — worth deciding whether to bump the peer range or pin lower for the beta.
-- [ ] `db/model.integration.test.ts` (sequence + `$currentUser`, real MongoDB) self-skips when no MongoDB is reachable — confirmed it does (tested with an unreachable `EFC_TEST_MONGO_URL`), so it won't break the existing `.github/workflows/ci.yml` (no Mongo service container wired up there). Still: CI currently gets zero coverage of this file. Add a Mongo service container to `ci.yml` to actually run it.
+- [x] (Fixed 2026-10-10 — `enqueueTimeout`, see below.) **BullMQ `enqueue()` hangs indefinitely when Redis is unreachable** — reproduced: `enqueue('ValidTask', payload)` against an unreachable Redis never resolves or rejects (tested past 5s with no timeout). Unknown task names still fail fast (registry check is synchronous, unaffected). Not a crash — BullMQ/ioredis retry quietly in the background — but there's no fail-fast/circuit-breaker option, and nothing in the docs warns callers their request may hang. Explicitly deferred by product decision on 2026-07-19; revisit before Phase 1 exit.
+- [x] (Resolved 2026-10-10 — see Phase 1 Completion Work.) Note: `mongoose` peer dependency range is `>=8.0.0` but the pinned devDependency is `^9.7.2`.
+- [x] (2026-10-10: `mongo:7` service container added to `ci.yml`.) `db/model.integration.test.ts` (sequence + `$currentUser`, real MongoDB) self-skips when no MongoDB is reachable — confirmed it does (tested with an unreachable `EFC_TEST_MONGO_URL`), so it won't break the existing `.github/workflows/ci.yml` (no Mongo service container wired up there). Still: CI currently gets zero coverage of this file. Add a Mongo service container to `ci.yml` to actually run it.
 
 ---
 
@@ -155,6 +155,20 @@ Verified with real repros against the built package (not just reading code) whil
 - [ ] Optional dynamic segments (`[[id]].ts`)
 - [ ] `efc db migrate / rollback / seed / studio`
 - [ ] Dead-letter inspection in `efc tasks`
+
+### `defineModel` gaps (found 2026-10-10)
+
+Today `defineModel` covers primitives, `required`/`unique`/`enum`/defaults, `ref` + `populate`, typed arrays, arrays of embedded sub-documents (nestable), `sequence`, and `timestamps`. Everything else needs raw mongoose.
+
+- [ ] **`update()` runs validators** — `findByIdAndUpdate` is called without `runValidators: true`, so updates can write an out-of-`enum` value or unset a `required` field. Bug, not a feature gap — do first.
+- [ ] **Typed embedded objects** — `address: { city: {...}, zip: {...} }` compiles to a real nested schema with validation. Today only arrays of sub-documents get one; `type: 'object'` is untyped `Mixed`.
+- [ ] **Query options on `find`** — `sort`, `limit`, `skip`, `select` (field projection) alongside the existing `populate`.
+- [ ] **Expose the underlying mongoose model** (e.g. `Model.raw()`), compiled eagerly or on demand — so mixing `defineModel` with raw mongoose doesn't depend on a CRUD call having registered the model first.
+- [ ] Typed query/update operators — accept `{ age: { $gt: 18 } }` / `{ $push: ... }` without a cast (runtime already passes them through).
+- [ ] Field validators — `min`, `max`, `minLength`, `maxLength`, `match`, custom `validate`.
+- [ ] Indexes beyond `unique` (compound, TTL, text) via `ModelOptions.indexes`.
+- [ ] Bulk + aggregation — `updateMany`, `deleteMany`, `aggregate`.
+- [ ] Transactions helper over mongoose sessions.
 
 ---
 
@@ -173,8 +187,39 @@ Verified with real repros against the built package (not just reading code) whil
 
 ---
 
-## What to Build Next (Priority Order)
+## Phase 1 Follow-ups (found 2026-10-10)
 
-1. **Integration tests** — route resolution, clustering, task lifecycle
-2. **GitHub Actions CI** — lint + test on every PR
-3. **End-to-end scaffolding test** — ensure `create-efc-app` works flawlessly
+- [x] **Scaffolder `cluster: true` regression** — `writeEntryPoint()` emitted a literal `cluster: true` again, forcing clustering under `efc start dev`. The regression test existed but `vitest.config.ts` only listed the `core` project, so it never ran. Added a `create-efc-app` project and fixed the generator.
+- [x] **Removed unused root `node-pty` dependency** — imported nowhere; its native build failed `npm ci` on machines without build tools.
+- [x] **Publish workflow red on main** — `create-efc-app` local `0.4.12` was already on npm. Bumped to `0.4.14` (core → `0.3.16`).
+- [x] Status strings synced to `v0.3.16` in `CLAUDE.md`, `packages/core/README.md`, `docs/index.md`, `Skills/efc/SKILL.md` and `client/` (hero badge, workspace status bar + demo `package.json`, new changelog entry).
+
+## Phase 1 Completion Work (2026-10-10)
+
+Found by actually running each exit criterion end to end, not by reading code:
+
+- [x] **`efc build prod` never produced a runnable app** — tsup bundled only `src/index.ts`; routes/tasks are discovered by filesystem scan at runtime, so `dist/` had none and the server fell back to `src/api/*.ts` (crashing on `.js` imports, or serving nothing in a dist-only Docker image). Now transpiles `src/**` + `efc.config.ts` unbundled → `dist/src/**`; `efc start prod` runs `dist/src/index.js`. JS projects build too (typecheck skipped without `tsconfig.json`).
+- [x] **`npx create-efc-app` failed `npm install` on Node 22 (npm 10.9)** — `vitest@^4.1.9` crashes npm 10's arborist (`Cannot read properties of null (reading 'edgesOut')`), reproduced with the published `0.3.15` too. Scaffolded projects now pin `vitest@^5.0.3`.
+- [x] **Scaffolder offered PostgreSQL / pg-boss** — neither is wired in the runtime, so those choices generated broken projects. Prompts now show MongoDB / BullMQ as fixed until Phase 2.
+- [x] **Cluster primary hung forever on primary-only SIGTERM** (`docker stop`, k8s) — workers were never signalled and the primary had no forced-exit timer. Primary now relays SIGTERM to workers and force-exits after `timeoutMs + 2s`; workers ignore a duplicate signal instead of dying mid-drain.
+- [x] **`efc start prod/dev` didn't forward signals** to the spawned server and reported exit 0 for a signal-killed child.
+- [x] **`enqueue()` fail-fast** — offline queue disabled on the producer connection + `tasks.enqueueTimeout` (default 5000 ms). Rejected jobs are never queued later.
+- [x] **`retries` off-by-one** — was passed straight to BullMQ `attempts` (total runs); now `retries + 1`, matching the docs.
+- [x] **`parseRedisUrl` dropped username, `/db` and `rediss://` TLS** — hosted Redis (Upstash, Redis Cloud, ElastiCache TLS/ACL) couldn't connect.
+- [x] **`gracefulShutdown()` now drains the BullMQ worker** before exit.
+
+### Decisions resolved
+
+- [x] `create-efc-app` runs `npm install -g express-file-cluster` after scaffolding — kept as intended behavior (confirmed 2026-10-10).
+- [x] mongoose versions aligned (2026-10-10): peer `^8.0.0 || ^9.0.0` (was an open-ended `>=8.0.0` that admitted untested v10), scaffolder `^9.7.2` (was `^8.0.0`). DB smoke + live-Mongo integration suites verified green on both 8.24.5 and 9.7.2. Smoke tests moved off deprecated `validateSync()` to `validate()`.
+
+## What to Build Next — Phase 2 (Priority Order)
+
+1. **`defineModel` — `update()` validators, typed embedded objects, `find` query options, raw model access** — the first is a correctness bug; the rest are the most-hit gaps vs. raw mongoose
+2. **Request validation (Zod)** — `export const schema = { body, query, params }` per route; no new infra, biggest DX win
+3. **Structured logging (`pino`) with request IDs** — replace `console.*` in core; correlate across workers
+4. **Catch-all + optional segments** (`[...params].ts`, `[[id]].ts`) — router-only change
+5. **Cron tasks** — wire the existing `schedule` option to BullMQ repeatable jobs (Redis already required)
+6. **Dead-letter inspection in `efc tasks`**
+7. **PostgreSQL (Drizzle) + pg-boss + `packages/adapters`** — largest item; re-enable the scaffolder choices when it lands
+8. `efc db migrate / rollback / seed / studio` — depends on 7

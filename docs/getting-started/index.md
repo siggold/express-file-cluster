@@ -19,7 +19,7 @@ The interactive wizard walks through:
 ```
 ? Project name:            my-api
 ? Language:                TypeScript | JavaScript
-? Database:                MongoDB | PostgreSQL
+  Database:                MongoDB (shown, not asked)
 ? Authentication strategy: http-only | localStorage
 ? Features: (space to toggle)
     ◉ Multi-core clustering
@@ -31,11 +31,11 @@ The interactive wizard walks through:
     ◯ Mailer
 ```
 
-> **PostgreSQL and the pg-boss task backend are scaffolded as choices but not yet implemented in the framework runtime** (landing in Phase 2). Picking MongoDB gives you a fully working `defineModel` + routes; picking PostgreSQL only generates commented-out Drizzle schema stubs and `// TODO` route bodies. See [Database](../guides/database.md).
+> **MongoDB and BullMQ are the only backends the runtime supports today**, so the wizard no longer offers PostgreSQL or pg-boss — they return as choices when the adapters land in Phase 2. See [Database](../guides/database.md).
 
 Depending on what you toggle on, you'll see follow-up questions:
 
-- **Background tasks** → pick a queue backend: `BullMQ` (Redis, works today) or `pg-boss` (PostgreSQL, not yet implemented).
+- **Background tasks** → uses `BullMQ` (Redis); set `REDIS_URL` in `.env`.
 - **Mailer** → pick an email provider: `Gmail` (preconfigured `smtp.gmail.com`, no host/port to type) or `Other (custom SMTP)` (asks for host + port). Either way you're then asked for the sending email address and password. **For Gmail this must be a 16-character App Password, not your normal Gmail password** — the prompt validates the length and rejects anything that isn't 16 characters. See [Mailer](../guides/mailer.md) for the full walkthrough, including how to generate an App Password.
 - **User portal / Admin portal** → scaffold a large set of ready-made models and routes (auth, profile, billing, support tickets, admin dashboard, content management, etc.). See [Generated Portals](../guides/generated-portals.md) for the complete list.
 - **Role-based access control** → generates a `Role` model and swaps every protected route's `middlewares` export to use the `requireAuth('role')` shorthand instead of an inline guard. See [RBAC](../guides/rbac.md).

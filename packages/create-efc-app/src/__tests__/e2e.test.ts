@@ -1,0 +1,158 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import fs from 'fs-extra';
+import { scaffold, NO_ADMIN_FEATURES, NO_USER_FEATURES } from '../scaffold.js';
+import type { AdminFeatures, UserFeatures } from '../scaffold.js';
+
+// Full scaffold flow, the way a user runs it: scaffold with the interactive defaults →
+// npm install (against a packed tarball of the local core, not the registry) →
+// `efc build prod` → boot → real HTTP. Slow and needs network + MongoDB + Redis, so it
+// only runs with EFC_E2E=1 (the `e2e` CI job sets it).
+const RUN = process.env['EFC_E2E'] === '1';
+const MONGO_URL = process.env['EFC_TEST_MONGO_URL'] ?? 'mongodb://127.0.0.1:27017/efc_e2e';
+const CORE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core');
+
+const all = <T extends object>(flags: T): T =>
+  Object.fromEntries(Object.keys(flags).map((k) => [k, true])) as T;
+
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, () => {
+      const { port } = srv.address() as net.AddressInfo;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+function run(cmd: string, args: string[], cwd: string): string {
+  return execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+describe.skipIf(!RUN)('create-efc-app — end to end', () => {
+  let workDir: string;
+  let appDir: string;
+  let server: ChildProcess | undefined;
+  let out = '';
+
+  beforeAll(async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'efc-e2e-'));
+    appDir = path.join(workDir, 'my-api');
+
+    const tarball = run('npm', ['pack', '--pack-destination', workDir], CORE_DIR)
+      .trim()
+      .split('\n')
+      .pop()!;
+
+    // Mirrors the defaults pre-selected in the interactive prompts (src/index.ts).
+    await scaffold({
+      projectName: appDir,
+      language: 'typescript',
+      database: 'mongodb',
+      authStrategy: 'http-only',
+      cluster: true,
+      tasks: true,
+      taskBackend: 'bullmq',
+      routeDocs: true,
+      userPortal: true,
+      adminPortal: true,
+      userFeatures: all<UserFeatures>(NO_USER_FEATURES),
+      adminFeatures: all<AdminFeatures>(NO_ADMIN_FEATURES),
+      rbac: true,
+      mailer: false,
+    });
+
+    const pkgPath = path.join(appDir, 'package.json');
+    const pkg = await fs.readJson(pkgPath);
+    pkg.dependencies['express-file-cluster'] = `file:${path.join(workDir, tarball)}`;
+    await fs.writeJson(pkgPath, pkg, { spaces: 2 });
+
+    const envPath = path.join(appDir, '.env');
+    const env = (await fs.readFile(envPath, 'utf8')).replace(
+      /^DATABASE_URL=.*$/m,
+      `DATABASE_URL=${MONGO_URL}`,
+    );
+    await fs.writeFile(envPath, env);
+
+    run('npm', ['install', '--no-audit', '--no-fund'], appDir);
+  }, 300_000);
+
+  afterAll(async () => {
+    if (server?.pid && server.exitCode === null) process.kill(-server.pid, 'SIGKILL');
+    if (workDir) await fs.remove(workDir);
+  });
+
+  it('builds for production with no type errors', () => {
+    run(path.join(appDir, 'node_modules', '.bin', 'efc'), ['build', 'prod'], appDir);
+    expect(fs.existsSync(path.join(appDir, 'dist', 'src', 'index.js'))).toBe(true);
+    expect(fs.existsSync(path.join(appDir, 'dist', 'src', 'api', 'health.js'))).toBe(true);
+    expect(fs.existsSync(path.join(appDir, 'dist', 'src', 'tasks', 'SendEmail.js'))).toBe(true);
+  }, 120_000);
+
+  it('boots the built app and serves health, register, login and the authed /me route', async () => {
+    const port = await freePort();
+    // `efc start prod` never reads .env — inject it the way a hosting platform would.
+    const dotenv = Object.fromEntries(
+      (await fs.readFile(path.join(appDir, '.env'), 'utf8'))
+        .split('\n')
+        .filter((l) => /^[A-Z_]+=/.test(l))
+        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]),
+    );
+    server = spawn(path.join(appDir, 'node_modules', '.bin', 'efc'), ['start', 'prod'], {
+      cwd: appDir,
+      env: { ...process.env, ...dotenv, PORT: String(port), NODE_ENV: 'production' },
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    server.stdout!.on('data', (d: Buffer) => (out += d.toString()));
+    server.stderr!.on('data', (d: Buffer) => (out += d.toString()));
+
+    const base = `http://127.0.0.1:${port}/v1/api`;
+    const start = Date.now();
+    for (;;) {
+      try {
+        if ((await fetch(`${base}/health`)).ok) break;
+      } catch {
+        /* not listening yet */
+      }
+      if (Date.now() - start > 30_000) throw new Error(`server never became healthy\n${out}`);
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    const health = await (await fetch(`${base}/health`)).json();
+    expect(health).toMatchObject({ status: 'OK' });
+
+    const email = `e2e-${Date.now()}@example.com`;
+    const register = await fetch(`${base}/auth/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'E2E', email, password: 'secret-pass-123' }),
+    });
+    expect(register.status, await register.clone().text()).toBe(201);
+
+    const login = await fetch(`${base}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, password: 'secret-pass-123' }),
+    });
+    expect(login.status, await login.clone().text()).toBe(200);
+    const cookie = login.headers.get('set-cookie');
+    expect(cookie).toBeTruthy();
+
+    const me = await fetch(`${base}/auth/me`, { headers: { cookie: cookie! } });
+    expect(me.status, await me.clone().text()).toBe(200);
+
+    expect((await fetch(`${base}/auth/me`)).status).toBe(401);
+  }, 60_000);
+
+  it('shuts down cleanly on SIGTERM', async () => {
+    const exited = new Promise<number | null>((resolve) => server!.once('exit', resolve));
+    process.kill(server!.pid!, 'SIGTERM');
+    expect(await exited, out).toBe(0);
+  }, 30_000);
+});

@@ -19,6 +19,12 @@ export function workerCount(): number {
 export function shutdownMaster(): void {
   isShuttingDown = true;
   console.log(`[EFC] Cluster master (pid=${process.pid}) shutting down, waiting for workers…`);
+  if (workerCount() === 0) process.exit(0);
+  // Orchestrators (docker stop, k8s) signal only PID 1 — the primary — so forward the
+  // signal; each worker's gracefulShutdown drains its server and exits on its own.
+  for (const worker of Object.values(cluster.workers ?? {})) {
+    worker?.process.kill('SIGTERM');
+  }
 }
 
 export function runMaster(options: ClusterOptions = {}): void {

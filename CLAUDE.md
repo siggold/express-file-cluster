@@ -14,7 +14,7 @@ A backend framework called **express-file-cluster** (`express-file-cluster` on n
 - MongoDB adapter via mongoose
 - CLI (`efc` binary)
 
-**Status: v0.3.15 Beta.** See `README.md` and `docs/` for full documentation.
+**Status: v0.3.16 Beta.** See `README.md` and `docs/` for full documentation.
 
 ---
 
@@ -63,7 +63,8 @@ src/api/posts/[s]/c.ts     → /posts/:s/c
 - Task name = file basename without extension (case-sensitive)
 - `tasksDir` is scanned **non-recursively** — subdirectories are NOT processed
 - `export default defineTask<Payload>(async (payload) => {...})` — default export required
-- `enqueue('TaskName', payload)` — throws if backend not configured or name not found
+- `enqueue('TaskName', payload)` — rejects if backend not configured, name not found, or Redis doesn't accept the job within `tasks.enqueueTimeout` (default 5000 ms)
+- `retries: N` = N re-runs → up to N + 1 attempts
 - `{ thread: true }` → runs in `worker_threads` (for CPU-bound work)
 
 ---
@@ -90,7 +91,7 @@ src/api/posts/[s]/c.ts     → /posts/:s/c
 - Database migrations, rollback, seed, studio CLI commands
 - Plugin system
 - WebSockets
-- `efc lint`, `efc deploy`, `efc --version` commands
+- `efc lint`, `efc deploy` commands
 
 Do not suggest or generate code for these features.
 
@@ -104,6 +105,7 @@ Do not suggest or generate code for these features.
 - `requireAuth` is dual-purpose: bare (`requireAuth`) it just verifies the JWT; called with role names (`requireAuth('admin')`) it returns a middleware that also enforces `payload.role`
 - `revokeToken` only clears the cookie — the JWT remains valid until expiry
 - `efc.config.ts` is informational; `src/index.ts` is the actual runtime entrypoint
+- `efc build prod` transpiles `src/**` unbundled → `dist/src/**` (entry `dist/src/index.js`); routes/tasks must exist as files in `dist/` because they're discovered by filesystem scan
 
 ---
 

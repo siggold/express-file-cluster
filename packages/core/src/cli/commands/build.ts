@@ -32,15 +32,42 @@ function findBin(name: string): string {
   }
 }
 
-function resolveEntry(): string | null {
-  const cwd = process.cwd();
-  const candidates = [
-    path.join(cwd, 'src', 'index.ts'),
-    path.join(cwd, 'index.ts'),
-    path.join(cwd, 'src', 'index.js'),
-    path.join(cwd, 'index.js'),
+// Routes and tasks are discovered by scanning the filesystem at runtime, so bundling
+// from src/index.ts would leave them out of dist/ entirely (and bundling each file would
+// duplicate shared modules like models). Instead every source file is transpiled 1:1:
+// src/api/users.ts → dist/src/api/users.js, with efc.config.ts → dist/efc.config.js.
+// tsup's CLI can't turn bundling off, so the config is generated per build.
+function writeAppTsupConfig(cwd: string): string {
+  const pkgPath = path.join(cwd, 'package.json');
+  const isEsm =
+    fs.existsSync(pkgPath) &&
+    (JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { type?: string }).type === 'module';
+  const entry = [
+    'src/**/*.{ts,mts,js,mjs}',
+    ...['efc.config.ts', 'efc.config.js'].filter((f) => fs.existsSync(path.join(cwd, f))),
+    '!src/**/*.d.ts',
+    '!src/**/*.test.*',
+    '!src/**/__tests__/**',
   ];
-  return candidates.find((f) => fs.existsSync(f)) ?? null;
+  const config = `export default {
+  entry: ${JSON.stringify(entry)},
+  outDir: 'dist',
+  format: ['${isEsm ? 'esm' : 'cjs'}'],
+  bundle: false,
+  splitting: false,
+  clean: true,
+  sourcemap: true,
+  platform: 'node',
+  target: 'node18',
+  esbuildOptions(options) {
+    options.outbase = '.';
+  },
+};
+`;
+  const configPath = path.join(cwd, 'node_modules', '.cache', 'efc', 'tsup.config.mjs');
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, config);
+  return configPath;
 }
 
 function hasTsupConfig(): boolean {
@@ -61,8 +88,9 @@ function buildProd(): void {
 
   const tsconfig = findTsConfig();
   if (!tsconfig) {
-    console.error(pc.red('[EFC] No tsconfig.json found in the current directory.'));
-    process.exit(1);
+    // JavaScript project — nothing to typecheck, but routes/tasks still need to land in dist/.
+    transpile();
+    return;
   }
 
   const tsc = spawn(findBin('tsc'), ['--noEmit', '--project', tsconfig], { stdio: 'inherit' });
@@ -72,29 +100,30 @@ function buildProd(): void {
       console.error(pc.red('[EFC] TypeScript errors found. Fix them before building.'));
       process.exit(1);
     }
+    transpile();
+  });
+}
 
-    let tsupArgs: string[];
-    if (hasTsupConfig()) {
-      tsupArgs = [];
-    } else {
-      const entry = resolveEntry();
-      if (!entry) {
-        console.error(
-          pc.red('[EFC] Could not find entry point. Expected src/index.ts or index.ts'),
-        );
-        process.exit(1);
-        return;
-      }
-      tsupArgs = [entry, '--format', 'cjs,esm', '--clean', '--target', 'node18'];
+function transpile(): void {
+  let tsupArgs: string[];
+  if (hasTsupConfig()) {
+    tsupArgs = [];
+  } else {
+    const cwd = process.cwd();
+    if (!['index.ts', 'index.js'].some((f) => fs.existsSync(path.join(cwd, 'src', f)))) {
+      console.error(pc.red('[EFC] Could not find entry point. Expected src/index.ts'));
+      process.exit(1);
+      return;
     }
+    tsupArgs = ['--config', writeAppTsupConfig(cwd)];
+  }
 
-    const tsup = spawn(findBin('tsup'), tsupArgs, { stdio: 'inherit' });
-    tsup.on('exit', (tsupCode) => {
-      if (tsupCode === 0) {
-        console.log(pc.green('[EFC] Build complete → dist/'));
-      } else {
-        process.exit(tsupCode ?? 1);
-      }
-    });
+  const tsup = spawn(findBin('tsup'), tsupArgs, { stdio: 'inherit' });
+  tsup.on('exit', (tsupCode) => {
+    if (tsupCode === 0) {
+      console.log(pc.green('[EFC] Build complete → dist/'));
+    } else {
+      process.exit(tsupCode ?? 1);
+    }
   });
 }

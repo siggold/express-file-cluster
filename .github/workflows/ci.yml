@@ -10,6 +10,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # Live-service integration tests (db/model.integration, integration/tasks)
+    # self-skip without a reachable MongoDB / Redis.
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,8 +40,52 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Before Test: integration/cluster.test.ts forks real workers from dist/.
       - name: Build
         run: npm run build --workspaces --if-present
 
       - name: Test
         run: npm test
+        env:
+          EFC_TEST_MONGO_URL: mongodb://127.0.0.1:27017/efc_core_test
+          EFC_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    # Node 22 ships npm 10 and Node 24 ships npm 11 — scaffolded installs have broken
+    # on one but not the other before, so cover both.
+    strategy:
+      matrix:
+        node-version: ['22', '24']
+
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install dependencies
+        run: npm ci --workspaces --include-workspace-root
+
+      - name: Build
+        run: npm run build --workspaces --if-present
+
+      - name: Scaffold → install → build → boot
+        run: npx vitest run --project create-efc-app e2e
+        env:
+          EFC_E2E: '1'
+          EFC_TEST_MONGO_URL: mongodb://127.0.0.1:27017/efc_e2e

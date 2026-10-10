@@ -127,10 +127,9 @@ efc db seed         # NOT IMPLEMENTED
 efc db studio       # NOT IMPLEMENTED
 efc lint            # NOT IMPLEMENTED
 efc deploy          # NOT IMPLEMENTED
-efc --version       # may not be wired — check package.json
 ```
 
-Implemented commands: `start dev`, `start prod`, `build prod`, `run tests`, `generate route/task/middleware`, `routes`, `tasks`, `doctor`.
+Implemented commands: `start dev`, `start prod`, `build prod`, `run tests`, `generate route/task/middleware`, `routes`, `tasks`, `doctor`, `--version` (read from the installed package.json).
 
 ---
 

@@ -384,9 +384,11 @@ export const POST = async (req, res) => {
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `thread` | `boolean` | `false` | Run in a `worker_threads` thread (CPU-bound work) |
-| `retries` | `number` | `3` | Attempts before dead-lettering |
+| `retries` | `number` | `3` | Re-runs after a failure (up to `retries + 1` attempts) before dead-lettering |
 | `backoff` | `'fixed' \| 'exponential'` | `'exponential'` | Retry delay strategy |
 | `concurrency` | `number` | `tasks.concurrency` | Parallel workers for this task |
+
+`enqueue()` rejects (never hangs) if Redis doesn't accept the job within `tasks.enqueueTimeout` (default `5000` ms).
 
 ---
 
@@ -465,7 +467,7 @@ efc start dev                        # Hot-reload single process (tsx --watch)
 
 # Production
 efc build prod                       # Type-check + compile (tsup, dual CJS/ESM)
-efc start prod                       # Run dist/ with clustering enabled
+efc start prod                       # Run dist/src/index.js with clustering enabled
 
 # Testing
 efc run tests                        # Vitest (--watch, --coverage passthrough)
@@ -599,8 +601,8 @@ npm run lint         # ESLint
 
 | Phase | Status | Focus |
 |---|---|---|
-| **1** | 🟡 In progress | Router, clustering, MongoDB, BullMQ, auth, CLI, scaffolder |
-| **2** | ⬜ Planned | PostgreSQL (Drizzle), Zod validation, structured logging (`pino`), cron tasks |
+| **1** | ✅ Complete | Router, clustering, MongoDB, BullMQ, auth, CLI, scaffolder |
+| **2** | ⬜ Planned | `defineModel` upgrades (embedded objects, query options, validators), PostgreSQL (Drizzle), Zod validation, structured logging (`pino`), cron tasks |
 | **3** | ⬜ Planned | Plugins, WebSockets, OpenAPI auto-gen, OpenTelemetry, `efc studio` |
 | **4** | ⬜ Planned | Edge/serverless adapter, gRPC, GraphQL |
 

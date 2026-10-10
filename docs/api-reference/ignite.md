@@ -180,8 +180,9 @@ Background task runtime configuration. Set to `false` (or omit) to disable the t
 ```ts
 interface TaskConfig {
   backend: 'bullmq' | 'pg-boss';
-  redisUrl?: string;    // BullMQ only — defaults to redis://localhost:6379
-  concurrency?: number; // Jobs processed in parallel per worker — default 5
+  redisUrl?: string;       // BullMQ only — defaults to redis://localhost:6379
+  concurrency?: number;    // Jobs processed in parallel per worker — default 5
+  enqueueTimeout?: number; // Max ms enqueue() waits for Redis before rejecting — default 5000
 }
 ```
 

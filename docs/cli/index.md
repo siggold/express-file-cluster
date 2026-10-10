@@ -20,7 +20,7 @@ npm install --save-dev express-file-cluster
 |---|---|
 | `efc start dev` | Development server — hot-reload, single process |
 | `efc start prod` | Production server — runs `dist/` with clustering |
-| `efc build prod` | Type-check + compile TypeScript to `dist/` |
+| `efc build prod` | Type-check + transpile `src/` to `dist/src/` |
 | `efc run tests` | Run tests via Vitest |
 | `efc generate route <path>` | Scaffold a route file |
 | `efc generate task <name>` | Scaffold a task file |

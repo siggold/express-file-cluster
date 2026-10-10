@@ -2,7 +2,7 @@
 
 **express-file-cluster (EFC)** is an opinionated backend framework built on Express. It removes routing ceremony, saturates every CPU core automatically, and ships a production-grade background-task subsystem — all from a single `ignite()` call.
 
-> **Status: v0.3.15 — Beta.** The router, clustering, auth, MongoDB adapter, and BullMQ task queue are implemented. PostgreSQL and the pg-boss task backend are scaffolded as choices but not yet implemented in the runtime.
+> **Status: v0.3.16 — Beta.** The router, clustering, auth, MongoDB adapter, and BullMQ task queue are implemented. PostgreSQL and the pg-boss task backend are scaffolded as choices but not yet implemented in the runtime.
 
 ---
 

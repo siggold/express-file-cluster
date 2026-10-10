@@ -38,7 +38,7 @@ Load **only** the module the work points to. Each is self-contained.
   docs/                   ← full documentation
 ```
 
-## Status (v0.3.15 — Beta)
+## Status (v0.3.16 — Beta)
 
 Implemented: file-based router, multi-core clustering, http-only + localStorage auth, MongoDB adapter (`mongoose`), BullMQ task queue, worker_threads for CPU-bound tasks, full CLI.
 

@@ -77,7 +77,7 @@
     <section class="hero" id="hero">
       <div class="hero-glow"></div>
       <div class="container">
-        <div class="badge">v0.3.14</div>
+        <div class="badge">v0.3.16</div>
         <h1 class="hero-title">
           Express, but your folder<br />
           <span class="accent">is your router.</span>
@@ -626,6 +626,34 @@
           <em>Change</em><span style="font-weight: 600">log</span>
         </h2>
         <div class="changelog-list">
+          <div class="changelog-item">
+            <div class="changelog-meta">
+              <div class="cl-version">express-file-cluster v0.3.16 / create-efc-app v0.4.14</div>
+              <div class="cl-date">Oct 10, 2026</div>
+              <div class="cl-tag">PHASE 1</div>
+            </div>
+            <div class="changelog-content">
+              <h3>Phase 1 Complete: Production Builds, Graceful Shutdown &amp; Fail-Fast Tasks</h3>
+              <p>
+                <code>efc build prod</code> now transpiles every file under <code>src/</code> into
+                <code>dist/src/</code> instead of bundling only the entry point, so routes and tasks
+                actually ship in production builds; <code>efc start prod</code> runs
+                <code>dist/src/index.js</code>. Shutdown is graceful at every layer:
+                <code>efc start</code> forwards <code>SIGTERM</code>/<code>SIGINT</code>, the cluster
+                primary relays them to its workers (so <code>docker stop</code> and Kubernetes no
+                longer hang), and in-flight task jobs finish before exit.
+              </p>
+              <p>
+                <code>enqueue()</code> now rejects within <code>tasks.enqueueTimeout</code> (default
+                5&nbsp;s) when Redis is down instead of hanging, <code>retries</code> now means re-runs
+                as documented, and Redis URLs keep their username, database number and
+                <code>rediss://</code> TLS. <code>npx create-efc-app</code> installs cleanly on
+                Node&nbsp;22 again, offers only the backends the runtime supports today, and is covered
+                by an end-to-end test in CI. mongoose 8 and 9 are both supported.
+              </p>
+            </div>
+          </div>
+
           <div class="changelog-item">
             <div class="changelog-meta">
               <div class="cl-version">express-file-cluster v0.3.14</div>

@@ -34,17 +34,18 @@ efc start prod
 
 **Behaviour:**
 
-- Checks that `dist/index.js` exists. If not, prints an error instructing you to run `efc build prod` first.
+- Looks for `dist/src/index.js` (the `efc build prod` layout), then `dist/index.js` (a custom `tsup.config`). If neither exists, prints an error instructing you to run `efc build prod` first.
 - Sets `NODE_ENV=production`.
 - Does **not** read `.env` — secrets must come from the platform's environment.
-- Spawns `node dist/index.js`.
-- With `NODE_ENV=production`, `ignite()` defaults `cluster` to `true` and forks `os.cpus().length` workers.
+- Spawns `node dist/src/index.js`.
+- Forwards `SIGTERM`/`SIGINT` to the server so `gracefulShutdown()` runs, and exits with the server's exit code.
+- With `NODE_ENV=production`, `ignite()` defaults `cluster` to `true` and forks `os.cpus().length` workers. When the primary receives `SIGTERM` it relays it to every worker, waits for them to drain, then exits.
 
 ---
 
 ## `efc build prod`
 
-Compiles TypeScript to JavaScript.
+Compiles the project to JavaScript in `dist/`.
 
 ```bash
 efc build prod
@@ -52,9 +53,19 @@ efc build prod
 
 **Behaviour:**
 
-- Runs `tsup` with the project's `tsup.config.ts`.
-- Outputs dual CJS/ESM bundles to `dist/`.
-- Type-checks the project (equivalent to `tsc --noEmit`).
+- Type-checks with `tsc --noEmit` when a `tsconfig.json` exists (skipped for JavaScript projects).
+- Transpiles **every** file under `src/` plus `efc.config.ts` with `tsup`, one output file per source file, keeping the directory tree:
+
+  ```
+  src/index.ts            → dist/src/index.js
+  src/api/users/[id].ts   → dist/src/api/users/[id].js
+  src/tasks/SendEmail.ts  → dist/src/tasks/SendEmail.js
+  efc.config.ts           → dist/efc.config.js
+  ```
+
+  Files are not bundled: routes and tasks are discovered by scanning the filesystem at runtime, so each one must exist in `dist/` as its own file. Test files (`*.test.*`, `__tests__/`) are skipped.
+- Output format follows `package.json` `"type"` — ESM for `"module"`, CommonJS otherwise.
+- If the project has its own `tsup.config.*`, that config is used instead.
 
 **Requires:** `tsup` installed as a dev dependency.
 

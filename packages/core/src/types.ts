@@ -8,6 +8,8 @@ export interface TaskConfig {
   backend: TaskBackend;
   redisUrl?: string;
   concurrency?: number;
+  /** Max milliseconds `enqueue()` waits for Redis before rejecting. Default: 5000. */
+  enqueueTimeout?: number;
 }
 
 export interface CorsConfig {

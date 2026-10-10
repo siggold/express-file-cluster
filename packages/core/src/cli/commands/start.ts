@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import pc from 'picocolors';
@@ -77,7 +77,11 @@ function startDev(): void {
 
   console.log(pc.cyan('[EFC] Starting development server…'));
   console.log(pc.dim(`  Entry: ${entry}`));
-  console.log(pc.dim('  .env is re-read fresh on every restart (no need to stop/restart `efc start dev` for .env changes to take effect)'));
+  console.log(
+    pc.dim(
+      '  .env is re-read fresh on every restart (no need to stop/restart `efc start dev` for .env changes to take effect)',
+    ),
+  );
 
   const cwd = process.cwd();
   // Walk up from cwd looking for tsx in node_modules/.bin (handles workspace hoisting)
@@ -107,15 +111,30 @@ function startDev(): void {
   };
 
   const child = spawn(tsx, ['watch', '--include', 'src', entry], { stdio: 'inherit', env });
-  child.on('exit', (code) => process.exit(code ?? 0));
+  forwardSignals(child);
+}
+
+// This CLI is often PID 1's direct child (`npm start`, `CMD ["npx", "efc", ...]`), so a
+// stop signal lands here, not on the server. Relay it so the app's gracefulShutdown runs,
+// and mirror the child's exit status instead of reporting success for a crash.
+function forwardSignals(child: ChildProcess): void {
+  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => child.kill(signal));
+  }
+  child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 }
 
 function startProd(): void {
   const cwd = process.cwd();
-  const distEntry = path.join(cwd, 'dist', 'index.js');
+  // `efc build prod` mirrors the source tree (dist/src/index.js); dist/index.js covers
+  // projects that build with their own tsup.config.
+  const distEntry = [
+    path.join(cwd, 'dist', 'src', 'index.js'),
+    path.join(cwd, 'dist', 'index.js'),
+  ].find((f) => fs.existsSync(f));
 
-  if (!fs.existsSync(distEntry)) {
-    console.error(pc.red('[EFC] dist/index.js not found. Run `efc build prod` first.'));
+  if (!distEntry) {
+    console.error(pc.red('[EFC] dist/src/index.js not found. Run `efc build prod` first.'));
     process.exit(1);
   }
 
@@ -127,7 +146,7 @@ function startProd(): void {
     stdio: 'inherit',
     env: { ...process.env, NODE_ENV: 'production' },
   });
-  child.on('exit', (code) => process.exit(code ?? 0));
+  forwardSignals(child);
 }
 
 function resolveEntry(): string | null {

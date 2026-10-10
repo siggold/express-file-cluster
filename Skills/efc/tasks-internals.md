@@ -77,6 +77,8 @@ if (!def) throw Error(`[EFC] Cannot enqueue unknown task: "${name}"...`)
 
 So `enqueue` throws for both "no backend" and "unknown task name".
 
+It also rejects when Redis is unreachable: the Queue's ioredis connection has `enableOfflineQueue: false`, and `waitUntilReady()` + `queue.add()` is raced against `tasks.enqueueTimeout` (default 5000 ms). Message: `[EFC] Cannot enqueue task "X": Redis at host:port did not respond within Nms`. A rejected job is never queued later.
+
 ---
 
 ## BullMQ queue name
@@ -109,7 +111,7 @@ enqueue('ResizeImage', payload)
 
 ```ts
 queue.add(name, payload, {
-  attempts: def.options.retries ?? 3,
+  attempts: (def.options.retries ?? 3) + 1, // retries = re-runs; attempts counts the first run
   backoff: {
     type: def.options.backoff ?? 'exponential',
     delay: 1000,
@@ -125,11 +127,11 @@ queue.add(name, payload, {
 
 Built-in `parseRedisUrl` in `bullmq-backend.ts`:
 ```ts
-// Parses: redis://[:password@]host[:port]
-{ host, port, password? }
+// Parses: redis[s]://[user:password@]host[:port][/db]
+{ host, port, username?, password?, db?, tls? }   // tls: {} for rediss://
 ```
 
-Defaults: `host: 'localhost'`, `port: 6379`. Does NOT support `rediss://` (TLS) natively — pass the parsed connection manually if you need TLS.
+Defaults: `host: 'localhost'`, `port: 6379`. User/password are URI-decoded.
 
 ---
 
@@ -137,5 +139,6 @@ Defaults: `host: 'localhost'`, `port: 6379`. Does NOT support `rediss://` (TLS) 
 
 - Does NOT start a dedicated task-runner process — tasks run inside each worker process.
 - Does NOT auto-retry on `enqueue` failure — `enqueue` itself doesn't retry; BullMQ handles job-level retries.
+- On `gracefulShutdown()`, the HTTP server closes first, then `closeBullMQ()` drains the worker (in-flight jobs finish) before exit.
 - Does NOT provide a dead-letter UI — use a BullMQ dashboard (e.g. Bull Board) for that.
 - Does NOT support sub-directories in `tasksDir`.

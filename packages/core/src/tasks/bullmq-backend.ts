@@ -6,6 +6,16 @@ import { runInThread } from './thread-runner.js';
 interface BullMQOpts {
   redisUrl: string;
   concurrency: number;
+  enqueueTimeout: number;
+}
+
+let closeImpl: (() => Promise<void>) | null = null;
+
+/** Drains the BullMQ worker and closes both Redis connections. No-op if never initialised. */
+export async function closeBullMQ(): Promise<void> {
+  const close = closeImpl;
+  closeImpl = null;
+  await close?.();
 }
 
 export async function initBullMQ(opts: BullMQOpts): Promise<void> {
@@ -17,7 +27,14 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
   }
 
   const connection = parseRedisUrl(opts.redisUrl);
-  const queue = new bullmq.Queue('efc', { connection });
+  // With the offline queue on (ioredis default) queue.add() buffers forever while Redis is
+  // down, so enqueue() never settles. Off, commands reject once the connection drops; the
+  // initial connect is bounded by the enqueueTimeout race below.
+  const queue = new bullmq.Queue('efc', {
+    connection: { ...connection, enableOfflineQueue: false },
+  });
+  // Without a listener, ioredis connection errors surface as unhandled 'error' events.
+  queue.on('error', () => {});
 
   const worker = new bullmq.Worker(
     'efc',
@@ -40,6 +57,10 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
     console.error(`[EFC] Task ${job?.name ?? 'unknown'} failed:`, err.message);
   });
 
+  worker.on('error', (err: Error) => {
+    console.error('[EFC] Task worker error:', err.message);
+  });
+
   worker.on('completed', (job: Job) => {
     console.log(`[EFC] Task ${job.name} completed (id=${job.id})`);
   });
@@ -52,26 +73,71 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
       );
     }
 
-    await queue.add(name, payload, {
-      attempts: def.options.retries ?? 3,
-      backoff: {
-        type: def.options.backoff ?? 'exponential',
-        delay: 1000,
-      },
+    const add = queue.waitUntilReady().then(() =>
+      queue.add(name, payload, {
+        // BullMQ's `attempts` counts the first run; `retries` counts only the re-runs.
+        attempts: (def.options.retries ?? 3) + 1,
+        backoff: {
+          type: def.options.backoff ?? 'exponential',
+          delay: 1000,
+        },
+      }),
+    );
+
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `[EFC] Cannot enqueue task "${name}": Redis at ${connection.host}:${connection.port} did not respond within ${opts.enqueueTimeout}ms`,
+            ),
+          ),
+        opts.enqueueTimeout,
+      );
     });
+
+    try {
+      await Promise.race([add, timeout]);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('[EFC]')) throw err;
+      throw new Error(
+        `[EFC] Cannot enqueue task "${name}": ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   });
+
+  closeImpl = async () => {
+    await worker.close();
+    await queue.close();
+  };
 
   console.log('[EFC] BullMQ backend initialised');
 }
 
-function parseRedisUrl(url: string): { host: string; port: number; password?: string } {
+interface RedisConnection {
+  host: string;
+  port: number;
+  username?: string;
+  password?: string;
+  db?: number;
+  tls?: Record<string, never>;
+}
+
+export function parseRedisUrl(url: string): RedisConnection {
   try {
     const u = new URL(url);
-    const result: { host: string; port: number; password?: string } = {
+    const result: RedisConnection = {
       host: u.hostname || 'localhost',
       port: parseInt(u.port || '6379', 10),
     };
-    if (u.password) result.password = u.password;
+    if (u.username) result.username = decodeURIComponent(u.username);
+    if (u.password) result.password = decodeURIComponent(u.password);
+    const db = parseInt(u.pathname.slice(1), 10);
+    if (!Number.isNaN(db)) result.db = db;
+    if (u.protocol === 'rediss:') result.tls = {};
     return result;
   } catch {
     return { host: 'localhost', port: 6379 };

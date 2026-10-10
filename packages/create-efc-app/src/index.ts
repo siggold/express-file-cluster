@@ -29,14 +29,10 @@ async function main(): Promise<void> {
   });
   if (p.isCancel(language)) cancel();
 
-  const database = await p.select({
-    message: 'Database:',
-    options: [
-      { value: 'mongodb', label: 'MongoDB', hint: 'Mongoose' },
-      { value: 'postgresql', label: 'PostgreSQL', hint: 'Drizzle ORM' },
-    ],
-  });
-  if (p.isCancel(database)) cancel();
+  // MongoDB is the only adapter the runtime connects today; PostgreSQL (Drizzle) is Phase 2.
+  // Offering it here would generate a project whose database is never connected.
+  const database: ScaffoldOptions['database'] = 'mongodb';
+  p.log.info(`Database: MongoDB ${pc.dim('(PostgreSQL arrives in Phase 2)')}`);
 
   const authStrategy = await p.select({
     message: 'Authentication strategy:',
@@ -51,7 +47,7 @@ async function main(): Promise<void> {
     message: 'Features: (space to toggle, enter to confirm)',
     options: [
       { value: 'cluster',    label: 'Multi-core clustering',          hint: 'Node cluster module' },
-      { value: 'tasks',      label: 'Background tasks',               hint: 'BullMQ / pg-boss' },
+      { value: 'tasks',      label: 'Background tasks',               hint: 'BullMQ (Redis)' },
       { value: 'routeDocs',  label: 'API route documentation',        hint: 'meta exports + dashboard' },
       { value: 'userPortal', label: 'User portal',                    hint: 'auth, profile, billing routes' },
       { value: 'adminPortal',label: 'Admin portal',                   hint: 'dashboard, user mgmt, analytics' },
@@ -129,17 +125,11 @@ async function main(): Promise<void> {
     };
   }
 
+  // BullMQ is the only backend the runtime starts; pg-boss is Phase 2.
   let taskBackend: ScaffoldOptions['taskBackend'];
   if (selected.has('tasks')) {
-    const backend = await p.select({
-      message: 'Task queue backend:',
-      options: [
-        { value: 'bullmq', label: 'BullMQ', hint: 'Redis' },
-        { value: 'pg-boss', label: 'pg-boss', hint: 'PostgreSQL' },
-      ],
-    });
-    if (p.isCancel(backend)) cancel();
-    taskBackend = backend as ScaffoldOptions['taskBackend'];
+    taskBackend = 'bullmq';
+    p.log.info(`Task queue: BullMQ (Redis) ${pc.dim('(pg-boss arrives in Phase 2)')}`);
   }
 
   let smtpProvider: ScaffoldOptions['smtpProvider'];
@@ -210,7 +200,7 @@ async function main(): Promise<void> {
   const opts: ScaffoldOptions = {
     projectName: projectName as string,
     language: language as ScaffoldOptions['language'],
-    database: database as ScaffoldOptions['database'],
+    database,
     authStrategy: authStrategy as ScaffoldOptions['authStrategy'],
     cluster:     selected.has('cluster'),
     tasks:       selected.has('tasks'),

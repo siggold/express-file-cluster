@@ -11,7 +11,7 @@ npm run build
 # → efc build prod
 ```
 
-`efc build prod` runs `tsup` with dual CJS/ESM output and emits everything to `dist/`. The entry point for production is `dist/index.js`.
+`efc build prod` type-checks, then transpiles every file in `src/` (plus `efc.config.ts`) into `dist/`, keeping the directory tree so routes and tasks are found at runtime. The entry point for production is `dist/src/index.js`.
 
 ---
 
@@ -20,10 +20,12 @@ npm run build
 ```bash
 npm start
 # → efc start prod
-# → node dist/index.js  (NODE_ENV=production)
+# → node dist/src/index.js  (NODE_ENV=production)
 ```
 
 `efc start prod` sets `NODE_ENV=production` and spawns the compiled server with `node`. It does **not** read `.env` — secrets must be injected through the platform's secret management.
+
+Stopping is graceful at every layer: `efc start prod` forwards `SIGTERM`/`SIGINT` to the server, the cluster primary relays it to each worker, and each worker stops accepting connections, finishes in-flight requests and task jobs, then exits. This works whether the signal reaches the whole process group (Ctrl+C) or only PID 1 (`docker stop`, Kubernetes).
 
 ---
 
@@ -93,7 +95,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 EXPOSE 3000
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/src/index.js"]
 ```
 
 Inject environment variables via `docker run -e` or a secrets manager. Do not copy `.env` into the image.

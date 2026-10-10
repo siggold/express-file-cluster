@@ -16,7 +16,7 @@ import { connectMongo } from './db/mongo.js';
 import { setDbClient } from './db/index.js';
 import { runWithContext } from './context.js';
 import { scanTasks } from './tasks/scanner.js';
-import { initBullMQ } from './tasks/bullmq-backend.js';
+import { initBullMQ, closeBullMQ } from './tasks/bullmq-backend.js';
 import { generateDashboard } from './dashboard.js';
 
 function detectDatabase(url?: string): 'mongodb' | 'postgresql' | undefined {
@@ -132,6 +132,7 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
       await initBullMQ({
         redisUrl: config.tasks.redisUrl ?? 'redis://localhost:6379',
         concurrency: config.tasks.concurrency ?? 5,
+        enqueueTimeout: config.tasks.enqueueTimeout ?? 5000,
       });
     }
   }
@@ -190,13 +191,21 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
 }
 
 export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10_000): void {
+  let shuttingDown = false;
   const shutdown = (signal: string) => {
+    // A worker can get the signal twice (process-group Ctrl+C plus the primary's
+    // forward); the default handler for a repeat would kill it mid-drain.
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`[EFC] ${signal} received — closing server gracefully…`);
     if (server) {
       server.closeIdleConnections();
       server.close(() => {
         console.log('[EFC] Server closed');
-        process.exit(0);
+        // Let in-flight task jobs finish before exiting; the timeout below still caps it.
+        closeBullMQ()
+          .catch((err: unknown) => console.error('[EFC] Task backend close failed:', err))
+          .finally(() => process.exit(0));
       });
       setTimeout(() => {
         console.error('[EFC] Forced exit after timeout');
@@ -204,10 +213,15 @@ export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10
       }, timeoutMs).unref();
     } else {
       shutdownMaster();
+      // Workers get the same budget plus a margin before the primary gives up on them.
+      setTimeout(() => {
+        console.error('[EFC] Workers did not exit in time — forcing primary exit');
+        process.exit(1);
+      }, timeoutMs + 2_000).unref();
     }
   };
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
-  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 export { HttpError, isHttpError } from './errors.js';

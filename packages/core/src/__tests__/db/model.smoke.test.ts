@@ -3,8 +3,16 @@ import { defineModel } from '../../db/model.js';
 import mongoose from 'mongoose';
 
 // Smoke test: exercises defineModel's mongoose schema compilation directly
-// (enum, nested array sub-schemas, plain + function defaults) using mongoose's
-// synchronous validateSync(), so no live DB connection is required.
+// (enum, nested array sub-schemas, plain + function defaults) using document
+// validation, which runs in-process — no live DB connection is required.
+
+// doc.validate() rejects with a ValidationError instead of returning one, as the
+// (deprecated in mongoose 9, removed in 10) validateSync() did.
+const validationError = (doc: mongoose.Document) =>
+  doc.validate().then(
+    () => undefined,
+    (err: mongoose.Error.ValidationError) => err,
+  );
 
 describe('defineModel — mongoose schema compilation', () => {
   it('builds enum, nested-array, and default fields correctly', async () => {
@@ -40,11 +48,11 @@ describe('defineModel — mongoose schema compilation', () => {
 
     // --- enum ---
     const badRole = new RawModel({ role: 'superadmin' });
-    const badRoleErr = badRole.validateSync();
+    const badRoleErr = await validationError(badRole);
     expect(badRoleErr?.errors['role']).toBeDefined();
 
     const goodRole = new RawModel({ role: 'admin' });
-    expect(goodRole.validateSync()?.errors['role']).toBeUndefined();
+    expect((await validationError(goodRole))?.errors['role']).toBeUndefined();
 
     // --- default (plain value) ---
     const defaultsDoc = new RawModel({});
@@ -59,14 +67,14 @@ describe('defineModel — mongoose schema compilation', () => {
       role: 'member',
       route_progress: [{ visited: true }], // route_id missing
     });
-    const nestedErr = missingNested.validateSync();
+    const nestedErr = await validationError(missingNested);
     expect(nestedErr?.errors['route_progress.0.route_id']).toBeDefined();
 
     const validNested = new RawModel({
       role: 'member',
       route_progress: [{ route_id: 'r1', visited: true }],
     });
-    expect(validNested.validateSync()).toBeUndefined();
+    expect(await validationError(validNested)).toBeUndefined();
   });
 
   it('resolves $now / $uuid default operator codes per-document', async () => {

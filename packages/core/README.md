@@ -4,7 +4,7 @@
 
 EFC is an opinionated backend framework built on Express. Drop files in `src/api/` and they become routes. Every CPU core serves traffic automatically. Heavy work goes to a queue-backed task subsystem so requests stay fast.
 
-> **Status: v0.3.15 (Beta).** The router, clustering, auth, MongoDB adapter, and BullMQ task queue backend are all implemented.
+> **Status: v0.3.16 (Beta).** The router, clustering, auth, MongoDB adapter, and BullMQ task queue backend are all implemented.
 
 ---
 
@@ -266,7 +266,7 @@ Task options:
 | Option | Default | Description |
 |---|---|---|
 | `thread` | `false` | Run in a `worker_threads` thread (CPU-bound work) |
-| `retries` | `3` | Retry attempts before dead-lettering |
+| `retries` | `3` | Re-runs after a failure (up to `retries + 1` attempts) before dead-lettering |
 | `backoff` | `'exponential'` | Delay strategy between retries |
 | `concurrency` | `tasks.concurrency` | Parallel jobs for this task |
 | `schedule` | — | Cron expression (accepted, not executed yet — planned) |
@@ -395,8 +395,8 @@ ignite({
 efc start dev         # Hot-reload single process (tsx --watch), .env re-read on every restart
 
 # Production
-efc build prod        # Type-check + compile to dist/ (tsup, dual CJS/ESM)
-efc start prod        # Run dist/ with clustering enabled
+efc build prod        # Type-check + transpile src/ → dist/src/ (tsup, unbundled)
+efc start prod        # Run dist/src/index.js with clustering enabled
 
 # Tests
 efc run tests         # Vitest  (--watch, --coverage passthrough)

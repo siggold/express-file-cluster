@@ -120,9 +120,9 @@ export async function scaffold(opts: ScaffoldOptions): Promise<void> {
 
 async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<void> {
   const deps: Record<string, string> = {
-    'express-file-cluster': '^0.3.0',
+    'express-file-cluster': '^0.3.16',
   };
-  if (opts.database === 'mongodb') deps['mongoose'] = '^8.0.0';
+  if (opts.database === 'mongodb') deps['mongoose'] = '^9.7.2';
   if (opts.database === 'postgresql') {
     deps['pg'] = '^8.0.0';
     deps['drizzle-orm'] = '^0.33.0';
@@ -133,13 +133,14 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
   if (opts.database === 'mongodb') deps['bcrypt'] = '^5.1.0';
 
   const devDeps: Record<string, string> = {
-    vitest: '^4.1.9',
+    vitest: '^5.0.3',
+    // `efc build prod` transpiles src/ into dist/ with tsup for JS projects too.
+    tsup: '^8.2.0',
   };
   if (opts.language === 'typescript') {
     devDeps['typescript'] = '^5.5.0';
     devDeps['@types/node'] = '^22.0.0';
     devDeps['@types/express'] = '^4.17.21';
-    devDeps['tsup'] = '^8.2.0';
     devDeps['tsx'] = '^4.0.0';
     if (opts.mailer) devDeps['@types/nodemailer'] = '^6.4.0';
     if (opts.database === 'mongodb') devDeps['@types/bcrypt'] = '^5.0.0';
@@ -176,7 +177,7 @@ async function writeTsConfig(dest: string, opts: ScaffoldOptions): Promise<void>
     },
     // No explicit rootDir: efc.config.ts lives at the project root, outside src/, and
     // src/index.ts imports it. `efc build prod` only uses this config for `tsc --noEmit`
-    // typechecking — the actual dist/index.js output path is decided by tsup's entry arg,
+    // typechecking — tsup writes the actual output (dist/src/**, dist/efc.config.js),
     // so leaving rootDir implicit here has no effect on the production build's output layout.
     include: ['src/**/*', 'efc.config.ts'],
     exclude: ['node_modules', 'dist'],
@@ -218,6 +219,9 @@ export default config;
 
 async function writeEntryPoint(dest: string, opts: ScaffoldOptions): Promise<void> {
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
+  // Only emit `cluster: false` on opt-out — a literal `cluster: true` would override
+  // ignite()'s NODE_ENV-aware default and cluster under `efc start dev` too.
+  const clusterLine = opts.cluster ? '' : '\n  cluster: false,';
   const content = `import { ignite, gracefulShutdown } from 'express-file-cluster';
 import config from '../efc.config.js';
 
@@ -225,8 +229,7 @@ import config from '../efc.config.js';
 // .env in efc.config.${ext} and spread in below — ignite() itself never touches process.env
 // for these, so this object is the single source of truth for what's actually applied.
 ignite({
-  ...config,
-  cluster: ${opts.cluster},
+  ...config,${clusterLine}
 }).then(gracefulShutdown).catch(console.error);
 `;
   await fs.outputFile(path.join(dest, 'src', `index.${ext}`), content);

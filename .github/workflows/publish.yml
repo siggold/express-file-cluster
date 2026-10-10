@@ -28,11 +28,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
-
+      # Before Test: integration/cluster.test.ts forks real workers from dist/.
       - name: Build packages
         run: npm run build --workspaces --if-present
+
+      - name: Test
+        run: npm test
 
       - name: Publish packages
         run: |

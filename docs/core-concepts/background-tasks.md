@@ -98,9 +98,10 @@ export const POST = async (req: Request, res: Response) => {
 };
 ```
 
-`enqueue(name, payload)` throws if:
+`enqueue(name, payload)` rejects if:
 - The task backend has not been initialised (missing `tasks` config in `ignite()`).
 - The task name was not found in the registry (file not in `src/tasks/`, or bad default export).
+- Redis did not accept the job within `tasks.enqueueTimeout` (default 5000 ms). The request fails fast instead of hanging, and the rejected job is not silently queued later.
 
 ---
 
@@ -127,11 +128,13 @@ When `tasks.backend === 'bullmq'`, `initBullMQ()` in `packages/core/src/tasks/bu
 4. The worker's processor looks up the task in the registry and either:
    - Calls `def.handler(job.data)` directly (I/O-bound), or
    - Calls `runInThread(def.filePath, job.data)` (CPU-bound).
-5. Wires `setEnqueueImpl` so `enqueue()` calls `queue.add(name, payload, { attempts, backoff })`.
+5. Wires `setEnqueueImpl` so `enqueue()` calls `queue.add(name, payload, { attempts: retries + 1, backoff })`, bounded by `enqueueTimeout`.
+
+On shutdown, `gracefulShutdown()` closes the HTTP server first, then lets the worker finish in-flight jobs before the process exits (still capped by its timeout).
 
 ### Redis connection
 
-The `REDIS_URL` env var (or `tasks.redisUrl` in `ignite()`) is parsed by the built-in `parseRedisUrl` helper. It supports standard `redis://[:password@]host[:port]` URLs.
+The `REDIS_URL` env var (or `tasks.redisUrl` in `ignite()`) is parsed by the built-in `parseRedisUrl` helper. It supports `redis://[user:password@]host[:port][/db]` and `rediss://` (TLS) URLs, so hosted Redis with ACL users and TLS (Upstash, Redis Cloud, ElastiCache) works as-is.
 
 ```ts
 ignite({
@@ -139,6 +142,7 @@ ignite({
     backend: 'bullmq',
     redisUrl: process.env.REDIS_URL,  // or omit — defaults to redis://localhost:6379
     concurrency: 5,
+    enqueueTimeout: 5000, // ms — enqueue() rejects instead of hanging when Redis is down
   },
 });
 ```
