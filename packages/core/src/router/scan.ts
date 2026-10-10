@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { RouteEntry } from '../types.js';
+import { getLogger } from '../logger.js';
 
 const ROUTE_FILE_RE = /\.(ts|js|mts|mjs|cts|cjs)$/;
 const DYNAMIC_SEGMENT_RE = /\[([^\]]+)\]/g;
@@ -130,7 +131,7 @@ export function scanDir(
 ): RouteEntry[] {
   if (!fs.existsSync(dir)) return [];
   if (_depth > maxDepth) {
-    console.warn(`[EFC] scanDir: max depth (${maxDepth}) reached at ${dir}, skipping subtree`);
+    getLogger().warn(`scanDir: max depth (${maxDepth}) reached at ${dir}, skipping subtree`);
     return [];
   }
 

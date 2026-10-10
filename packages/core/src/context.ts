@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Logger } from 'pino';
 
 export interface RequestContext {
   user?: Record<string, unknown> | undefined;
+  requestId?: string;
+  log?: Logger;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

@@ -2,6 +2,7 @@ import type { Job } from 'bullmq';
 import type * as BullMQNS from 'bullmq';
 import { taskRegistry, setEnqueueImpl } from './index.js';
 import { runInThread } from './thread-runner.js';
+import { getLogger } from '../logger.js';
 
 interface BullMQOpts {
   redisUrl: string;
@@ -54,15 +55,18 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
   );
 
   worker.on('failed', (job: Job | undefined, err: Error) => {
-    console.error(`[EFC] Task ${job?.name ?? 'unknown'} failed:`, err.message);
+    getLogger().error(
+      { task: job?.name, jobId: job?.id, attempt: job?.attemptsMade, err },
+      `Task ${job?.name ?? 'unknown'} failed`,
+    );
   });
 
   worker.on('error', (err: Error) => {
-    console.error('[EFC] Task worker error:', err.message);
+    getLogger().error(`Task worker error: ${err.message}`);
   });
 
   worker.on('completed', (job: Job) => {
-    console.log(`[EFC] Task ${job.name} completed (id=${job.id})`);
+    getLogger().info({ task: job.name, jobId: job.id }, `Task ${job.name} completed`);
   });
 
   setEnqueueImpl(async (name, payload) => {
@@ -114,7 +118,7 @@ export async function initBullMQ(opts: BullMQOpts): Promise<void> {
     await queue.close();
   };
 
-  console.log('[EFC] BullMQ backend initialised');
+  getLogger().info('BullMQ backend initialised');
 }
 
 interface RedisConnection {

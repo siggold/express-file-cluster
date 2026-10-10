@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { registerTask } from './index.js';
+import { getLogger } from '../logger.js';
 import type { TaskDefinition } from '../types.js';
 
 export async function scanTasks(tasksDir: string): Promise<void> {
@@ -17,14 +18,14 @@ export async function scanTasks(tasksDir: string): Promise<void> {
       const def = mod['default'] as TaskDefinition | undefined;
 
       if (!def || typeof def.handler !== 'function') {
-        console.warn(`[EFC] Task file ${file} has no valid default export — skipping`);
+        getLogger().warn(`Task file ${file} has no valid default export — skipping`);
         continue;
       }
 
       registerTask(taskName, { ...def, filePath });
-      console.log(`[EFC] Registered task: ${taskName}`);
+      getLogger().debug(`Registered task: ${taskName}`);
     } catch (err) {
-      console.warn(`[EFC] Failed to load task ${file}:`, err);
+      getLogger().warn({ err }, `Failed to load task ${file}`);
     }
   }
 }

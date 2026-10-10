@@ -15,6 +15,7 @@ import { isHttpError } from './errors.js';
 import { connectMongo } from './db/mongo.js';
 import { setDbClient } from './db/index.js';
 import { runWithContext } from './context.js';
+import { configureLogger, getLogger, requestLogger } from './logger.js';
 import { scanTasks } from './tasks/scanner.js';
 import { initBullMQ, closeBullMQ } from './tasks/bullmq-backend.js';
 import { generateDashboard } from './dashboard.js';
@@ -71,6 +72,8 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   // secret — unlike PORT/DATABASE_URL/JWT_SECRET/etc. this one is still read directly.
   const clusterEnabled = config.cluster ?? process.env['NODE_ENV'] === 'production';
 
+  configureLogger(config.logging);
+
   if (clusterEnabled && cluster.isPrimary) {
     runMaster({
       workers: workers ?? os.cpus().length,
@@ -88,6 +91,7 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   app.use((_req, _res, next) => {
     runWithContext({}, next);
   });
+  app.use(requestLogger());
 
   const corsOption = config.cors ?? true;
   if (corsOption !== false) {
@@ -169,7 +173,7 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
         } else if (duckTyped) {
           res.status(duckTyped.statusCode).json({ error: duckTyped.message, statusCode: duckTyped.statusCode });
         } else {
-          console.error('[EFC] Unhandled error:', err);
+          getLogger().error({ err }, 'Unhandled error');
           res.status(500).json({ error: 'Internal Server Error', statusCode: 500 });
         }
       },
@@ -182,7 +186,7 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
     server.once('listening', () => {
       const wid = (cluster.worker as { id: number } | undefined)?.id ?? 'primary';
       const addr = server.address() as { port: number } | null;
-      console.log(`[EFC] Worker ${wid} listening on :${addr?.port ?? port}`);
+      getLogger().info(`Worker ${wid} listening on :${addr?.port ?? port}`);
       resolve(server);
     });
 
@@ -197,25 +201,25 @@ export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10
     // forward); the default handler for a repeat would kill it mid-drain.
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[EFC] ${signal} received — closing server gracefully…`);
+    getLogger().info(`${signal} received — closing server gracefully…`);
     if (server) {
       server.closeIdleConnections();
       server.close(() => {
-        console.log('[EFC] Server closed');
+        getLogger().info('Server closed');
         // Let in-flight task jobs finish before exiting; the timeout below still caps it.
         closeBullMQ()
-          .catch((err: unknown) => console.error('[EFC] Task backend close failed:', err))
+          .catch((err: unknown) => getLogger().error({ err }, 'Task backend close failed'))
           .finally(() => process.exit(0));
       });
       setTimeout(() => {
-        console.error('[EFC] Forced exit after timeout');
+        getLogger().error('Forced exit after timeout');
         process.exit(1);
       }, timeoutMs).unref();
     } else {
       shutdownMaster();
       // Workers get the same budget plus a margin before the primary gives up on them.
       setTimeout(() => {
-        console.error('[EFC] Workers did not exit in time — forcing primary exit');
+        getLogger().error('Workers did not exit in time — forcing primary exit');
         process.exit(1);
       }, timeoutMs + 2_000).unref();
     }
@@ -225,6 +229,7 @@ export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10
 }
 
 export { HttpError, isHttpError } from './errors.js';
+export { logger, getLogger } from './logger.js';
 export { compose } from './compose.js';
 export { db, setDbClient, getDbClient, defineModel } from './db/index.js';
 export { scanDir } from './router/scan.js';
@@ -237,6 +242,7 @@ export type {
   RouteMeta,
   RouteMethodMeta,
   RouteSchema,
+  LoggingConfig,
   RequestSchema,
   Validator,
   ValidationIssue,

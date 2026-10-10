@@ -12,6 +12,15 @@ export interface TaskConfig {
   enqueueTimeout?: number;
 }
 
+export interface LoggingConfig {
+  /** Minimum level to emit. Default: 'info'. */
+  level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
+  /** Human-readable lines instead of JSON. Default: on in a non-production TTY. */
+  pretty?: boolean;
+  /** Log one line per completed request (method, url, status, duration). Default: true. */
+  requests?: boolean;
+}
+
 export interface CorsConfig {
   origin?: string | string[] | boolean;
   methods?: string | string[];
@@ -36,6 +45,8 @@ export interface EFCConfig {
   workers?: number;
   tasks?: TaskConfig | false;
   cors?: boolean | CorsConfig;
+  /** Structured logging (pino). `false` silences framework logs. */
+  logging?: LoggingConfig | false;
   /** Request timeout in milliseconds. Requests exceeding this duration will be terminated with 408. */
   requestTimeout?: number;
   globalMiddlewares?: RequestHandler[];
