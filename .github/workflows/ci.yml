@@ -10,8 +10,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    # Live-service integration tests (db/model.integration, integration/tasks)
-    # self-skip without a reachable MongoDB / Redis.
+    # Live-service integration tests self-skip without a reachable database, so every
+    # backend they cover is provided here.
     services:
       mongo:
         image: mongo:7
@@ -21,6 +21,15 @@ jobs:
         image: redis:7
         ports:
           - 6379:6379
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: efc_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
       - name: Checkout
@@ -30,6 +39,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+
+      # MongoDB transactions need a replica set; service containers can't take --replSet.
+      - name: Start MongoDB replica set
+        run: |
+          docker run -d --name mongo-rs -p 27018:27017 mongo:7 --replSet rs0
+          for i in $(seq 1 30); do
+            docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ ping: 1 })' && break
+            sleep 1
+          done
+          docker exec mongo-rs mongosh --quiet --eval \
+            'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })'
 
       - name: Install dependencies
         run: npm ci --workspaces --include-workspace-root
@@ -48,7 +68,9 @@ jobs:
         run: npm test
         env:
           EFC_TEST_MONGO_URL: mongodb://127.0.0.1:27017/efc_core_test
+          EFC_TEST_MONGO_RS_URL: mongodb://127.0.0.1:27018/efc_tx_test?replicaSet=rs0&directConnection=true
           EFC_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+          EFC_TEST_PG_URL: postgres://postgres@127.0.0.1:5432/efc_test
 
   e2e:
     runs-on: ubuntu-latest
@@ -68,6 +90,15 @@ jobs:
         image: redis:7
         ports:
           - 6379:6379
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: efc_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
       - name: Checkout
@@ -84,8 +115,9 @@ jobs:
       - name: Build
         run: npm run build --workspaces --if-present
 
-      - name: Scaffold → install → build → boot
+      - name: Scaffold → install → migrate → build → boot (MongoDB + BullMQ, PostgreSQL + pg-boss)
         run: npx vitest run --project create-efc-app e2e
         env:
           EFC_E2E: '1'
           EFC_TEST_MONGO_URL: mongodb://127.0.0.1:27017/efc_e2e
+          EFC_TEST_PG_URL: postgres://postgres@127.0.0.1:5432/efc_e2e

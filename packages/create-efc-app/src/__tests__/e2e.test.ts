@@ -10,8 +10,9 @@ import type { AdminFeatures, UserFeatures } from '../scaffold.js';
 
 // Full scaffold flow, the way a user runs it: scaffold with the interactive defaults →
 // npm install (against a packed tarball of the local core, not the registry) →
-// `efc build prod` → boot → real HTTP. Slow and needs network + MongoDB + Redis, so it
-// only runs with EFC_E2E=1 (the `e2e` CI job sets it).
+// `efc db migrate` → `efc build prod` → boot → real HTTP, for both stacks. Slow and needs
+// network plus MongoDB, Redis and PostgreSQL, so it only runs with EFC_E2E=1 (the `e2e`
+// CI job sets it).
 const RUN = process.env['EFC_E2E'] === '1';
 const MONGO_URL = process.env['EFC_TEST_MONGO_URL'] ?? 'mongodb://127.0.0.1:27017/efc_e2e';
 const PG_URL = process.env['EFC_TEST_PG_URL'] ?? 'postgres://postgres@127.0.0.1:5433/efc_e2e';
