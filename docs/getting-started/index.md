@@ -19,7 +19,7 @@ The interactive wizard walks through:
 ```
 ? Project name:            my-api
 ? Language:                TypeScript | JavaScript
-  Database:                MongoDB (shown, not asked)
+? Database:                MongoDB | PostgreSQL
 ? Authentication strategy: http-only | localStorage
 ? Features: (space to toggle)
     ◉ Multi-core clustering
@@ -31,11 +31,11 @@ The interactive wizard walks through:
     ◯ Mailer
 ```
 
-> **MongoDB and BullMQ are the only backends the runtime supports today**, so the wizard no longer offers PostgreSQL or pg-boss — they return as choices when the adapters land in Phase 2. See [Database](../guides/database.md).
+Generated models and routes are identical for both databases — `defineModel` compiles to mongoose or Drizzle at runtime. See [Database](../guides/database.md).
 
 Depending on what you toggle on, you'll see follow-up questions:
 
-- **Background tasks** → uses `BullMQ` (Redis); set `REDIS_URL` in `.env`.
+- **Background tasks** → pick a queue backend: `BullMQ` (Redis — `REDIS_URL` in `.env`) or `pg-boss` (stores jobs in your PostgreSQL, no Redis to run).
 - **Mailer** → pick an email provider: `Gmail` (preconfigured `smtp.gmail.com`, no host/port to type) or `Other (custom SMTP)` (asks for host + port). Either way you're then asked for the sending email address and password. **For Gmail this must be a 16-character App Password, not your normal Gmail password** — the prompt validates the length and rejects anything that isn't 16 characters. See [Mailer](../guides/mailer.md) for the full walkthrough, including how to generate an App Password.
 - **User portal / Admin portal** → scaffold a large set of ready-made models and routes (auth, profile, billing, support tickets, admin dashboard, content management, etc.). See [Generated Portals](../guides/generated-portals.md) for the complete list.
 - **Role-based access control** → generates a `Role` model and swaps every protected route's `middlewares` export to use the `requireAuth('role')` shorthand instead of an inline guard. See [RBAC](../guides/rbac.md).
@@ -46,8 +46,9 @@ After confirmation it:
 2. Creates `efc.config.ts` pre-configured for your choices.
 3. Generates `.env` (gitignored, `JWT_SECRET` pre-filled with `openssl rand -hex 64`, plus `SMTP_*` vars if you enabled the mailer) and `.env.example` (committed, documented placeholders).
 4. Adds `.env` to `.gitignore`.
-5. Writes `package.json` lifecycle scripts (`dev`, `build`, `start`, `test`).
-6. Runs `npm install` with the dependencies for your selections, then installs the `efc` CLI globally.
+5. Writes `package.json` lifecycle scripts (`dev`, `build`, `start`, `test`, `db:migrate`, `db:rollback`, `db:seed`, `db:studio`).
+6. With a User or Admin portal, writes `src/migrations/00000000000000_init` that creates every generated model's table/collection and indexes.
+7. Runs `npm install` with the dependencies for your selections, then installs the `efc` CLI globally.
 
 ---
 
@@ -59,6 +60,10 @@ After confirmation it:
 | `npm run build` | `efc build prod` | CI/CD — type-check + compile to `dist/` |
 | `npm start` | `efc start prod` | Production — runs `dist/` with clustering |
 | `npm test` | `efc run tests` | Test suite via Vitest |
+| `npm run db:migrate` | `efc db migrate` | Apply pending migrations |
+| `npm run db:rollback` | `efc db rollback` | Revert the last migration batch |
+| `npm run db:seed` | `efc db seed` | Run seed scripts |
+| `npm run db:studio` | `efc db studio` | Browse the database (read-only) |
 
 ---
 
@@ -66,8 +71,9 @@ After confirmation it:
 
 ```bash
 cd my-api
+npm run db:migrate   # create tables / indexes (needed on PostgreSQL before first boot)
 npm run dev
-# [EFC] Worker primary listening on :3000
+# 12:00:01 INFO  [primary] Worker primary listening on :3000
 ```
 
 The server is live at `http://localhost:3000`. The scaffolder creates a `src/api/health.ts` route at `/health` as a smoke test.
@@ -81,4 +87,6 @@ The server is live at `http://localhost:3000`. The scaffolder creates a `src/api
 - [Generated Portals](../guides/generated-portals.md) — full model/route inventory if you enabled User or Admin portal.
 - [RBAC](../guides/rbac.md) — role-based route protection.
 - [Mailer](../guides/mailer.md) — Gmail app-password and custom SMTP setup.
+- [Migrations & Seeds](../guides/migrations.md) — evolving the schema.
+- [Validation](../guides/validation.md) — `export const schema` with zod & co.
 - [CLI Reference](../cli/index.md) — all `efc` commands.

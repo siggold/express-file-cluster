@@ -39,10 +39,20 @@ Set these in your deployment platform:
 | `PORT` | Usually set by the platform (Heroku, Railway, etc.) |
 | `DATABASE_URL` | Production database connection string |
 | `JWT_SECRET` | Production signing key — different from dev |
-| `REDIS_URL` | Required if using BullMQ |
+| `REDIS_URL` | Required if using BullMQ (pg-boss uses `DATABASE_URL`) |
 | `CORS_ORIGINS` | Your production frontend domain(s) |
 
 ---
+
+## Migrations
+
+Run pending migrations before the new version starts serving — as a release step on your platform, or in the container command:
+
+```bash
+npx efc db migrate --dist   # --dist: use compiled dist/src/migrations (no tsx in production)
+```
+
+On PostgreSQL concurrent `migrate` runs take an advisory lock, so it's safe if several instances run it at deploy time. See [Migrations & Seeds](./migrations.md).
 
 ## Clustering in production
 
@@ -77,6 +87,15 @@ The default drain window is 10 seconds. Adjust for long-running requests:
   .then((server) => gracefulShutdown(server, 30_000));
 ```
 
+What happens on `SIGTERM`:
+
+1. `efc start prod` (if it's your entrypoint) forwards the signal to the server process.
+2. The cluster primary relays it to every worker — orchestrators like `docker stop` and Kubernetes signal only PID 1.
+3. Each worker stops accepting connections, finishes in-flight requests and running task jobs, then exits `0`.
+4. The primary exits once all workers have; it force-exits after `timeoutMs + 2s` if one hangs.
+
+Set your orchestrator's grace period (`terminationGracePeriodSeconds`, `stop_grace_period`) above `timeoutMs`.
+
 ---
 
 ## Docker
@@ -95,7 +114,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 EXPOSE 3000
-CMD ["node", "dist/src/index.js"]
+CMD ["sh", "-c", "npx efc db migrate --dist && node dist/src/index.js"]
 ```
 
 Inject environment variables via `docker run -e` or a secrets manager. Do not copy `.env` into the image.
@@ -145,5 +164,8 @@ livenessProbe:
 - [ ] `CORS_ORIGINS` is set to your actual frontend domain(s)
 - [ ] `gracefulShutdown` is wired in `src/index.ts`
 - [ ] Health check endpoint is configured in the load balancer
-- [ ] Redis is available if using BullMQ tasks
+- [ ] Redis is available if using BullMQ tasks (pg-boss needs only Postgres)
+- [ ] `efc db migrate` runs before the new version serves traffic
+- [ ] Orchestrator grace period > `gracefulShutdown` timeout
+- [ ] Logs are collected from stdout (JSON lines with `reqId`)
 - [ ] `efc doctor` passes locally with production-like env vars

@@ -8,7 +8,7 @@
 
 # express-file-cluster
 
-**File-based routing · Multi-core clustering · Background tasks · Zero boilerplate**
+**File-based routing · Multi-core clustering · MongoDB & PostgreSQL · Background tasks · Zero boilerplate**
 
 [![npm version](https://img.shields.io/npm/v/express-file-cluster?color=6366f1&label=npm&logo=npm&logoColor=white)](https://www.npmjs.com/package/express-file-cluster)
 [![npm downloads](https://img.shields.io/npm/dm/express-file-cluster?color=8b5cf6&logo=npm&logoColor=white)](https://www.npmjs.com/package/express-file-cluster)
@@ -22,11 +22,12 @@
 
 ---
 
-EFC is an opinionated backend framework built on Express. Drop files in `src/api/` and they become routes. Every CPU core serves traffic automatically. Heavy work goes to a queue-backed task system so your request handlers stay fast.
+EFC is an opinionated backend framework built on Express. Drop files in `src/api/` and they become routes. Every CPU core serves traffic automatically. One model API runs on MongoDB or PostgreSQL. Heavy work goes to a queue-backed task system — Redis or Postgres — so your request handlers stay fast.
 
 ```bash
 npx create-efc-app my-api
 cd my-api
+efc db migrate
 efc start dev
 ```
 
@@ -106,8 +107,10 @@ my-api/
 │   ├── tasks/                        # Background job definitions
 │   │   ├── SendEmail.ts
 │   │   └── ResizeImage.ts
-│   ├── models/
-│   │   └── User.ts                   # defineModel() schemas
+│   ├── model/
+│   │   └── User.ts                   # defineModel() schemas — MongoDB or PostgreSQL
+│   ├── migrations/                   # efc db migrate / rollback
+│   ├── seeds/                        # efc db seed
 │   └── index.ts                      # ignite() entry point
 ├── efc.config.ts
 ├── .env                              # Gitignored — JWT_SECRET auto-generated
@@ -128,6 +131,25 @@ Export uppercase HTTP method names from any file under `src/api/`. Everything el
 | `api/users/index.ts` | `GET /users` · `POST /users` |
 | `api/users/[id].ts` | `GET /users/:id` · `DELETE /users/:id` |
 | `api/posts/[slug]/comments.ts` | `GET /posts/:slug/comments` |
+| `api/users/[[id]].ts` | `/users` and `/users/:id` |
+| `api/docs/[...slug].ts` | `/docs/a/b/c` → `req.params.slug = ['a','b','c']` |
+| `api/docs/[[...slug]].ts` | also `/docs` → `slug = []` |
+
+Static segments beat `[id]`, which beats `[[id]]`, then catch-alls — at every position.
+
+### Request validation
+
+Export `schema` with any [Standard Schema](https://standardschema.dev) validator (zod, valibot, arktype) — invalid requests get a 400 with every issue, valid ones arrive parsed:
+
+```ts
+import { z } from 'zod';
+
+export const schema = {
+  POST: { body: z.object({ email: z.string().email(), age: z.coerce.number().min(18) }) },
+};
+
+export const POST = async (req, res) => res.status(201).json(req.body); // { email, age: number }
+```
 
 ### Route handler
 
@@ -195,7 +217,7 @@ export const POST = compose(
 
 ### `defineModel()`
 
-Declare a typed model with a schema. EFC compiles it to a Mongoose model and wraps it in a clean CRUD surface.
+Declare a typed model once. EFC compiles it to a mongoose model on MongoDB or a Drizzle table on PostgreSQL — whichever `DATABASE_URL` points at — behind the same API.
 
 ```ts
 // src/model/User.ts
@@ -256,24 +278,28 @@ export const Audit = defineModel<AuditDocument>('Audit', schema, {
 });
 ```
 
-### CRUD surface
+Fields can be embedded objects (`address: { city: {...}, zip: {...} }`), arrays of embedded documents (`items: [{ sku: {...} }]`), and carry validators: `required`, `unique`, `enum`, `min`/`max`, `minLength`/`maxLength`, `match`, custom `validate`.
+
+### Queries and writes
 
 ```ts
-await User.find({ role: 'admin' });            // find all matching
-await User.findById('66a1...');                // by _id
-await User.findOne({ email: 'a@b.com' });      // first match
-await User.create({ name: 'Alice', ... });     // insert
-await User.update('66a1...', { name: 'Bob' }); // findOneAndUpdate
-await User.delete('66a1...');                  // remove
-await User.count({ role: 'user' });            // count matching
+await User.find(
+  { role: { $in: ['admin', 'editor'] }, 'address.city': 'Oslo', createdAt: { $gte: since } },
+  { sort: { createdAt: -1 }, skip: 20, limit: 20, select: ['name', 'email'], populate: 'team' },
+);
+await User.findById(id);                                  // malformed id → null
+await User.create({ name: 'Alice', email: 'a@b.com' });   // validated
+await User.update(id, { $inc: { logins: 1 }, $push: { tags: 'vip' } }); // validated too
+await User.updateMany({ active: false }, { $set: { archived: true } }); // → count
+await User.deleteMany({ archived: true });                // → count
+
+await transaction(async () => {        // every model call inside joins the transaction
+  await Order.create({ total: 40 });
+  await Wallet.update(walletId, { $inc: { balance: -40 } });
+});
 ```
 
-Populate references:
-
-```ts
-await Post.find({}, { populate: 'author' });
-await Post.findById(id, { populate: ['author', 'comments.user'] });
-```
+Invalid writes throw `ModelValidationError` (→ 400 with field `issues`); duplicate unique values → 409. Tables and indexes are created by `Model.sync()` from a migration: `efc db migrate`.
 
 ---
 
@@ -387,8 +413,12 @@ export const POST = async (req, res) => {
 | `retries` | `number` | `3` | Re-runs after a failure (up to `retries + 1` attempts) before dead-lettering |
 | `backoff` | `'fixed' \| 'exponential'` | `'exponential'` | Retry delay strategy |
 | `concurrency` | `number` | `tasks.concurrency` | Parallel workers for this task |
+| `schedule` | `string` | — | Cron pattern — `'0 3 * * *'` runs daily at 03:00 |
+| `timezone` | `string` | server time | IANA timezone for `schedule` |
 
-`enqueue()` rejects (never hangs) if Redis doesn't accept the job within `tasks.enqueueTimeout` (default `5000` ms).
+`enqueue()` rejects (never hangs) if the backend doesn't accept the job within `tasks.enqueueTimeout` (default `5000` ms).
+
+Backends: **BullMQ** (`tasks: { backend: 'bullmq', redisUrl }`) or **pg-boss** (`tasks: { backend: 'pg-boss' }` — jobs live in your PostgreSQL, no Redis). Jobs that exhaust their retries are inspected with `efc tasks failed`, `efc tasks retry`, `efc tasks purge`.
 
 ---
 
@@ -466,7 +496,7 @@ ignite({
 efc start dev                        # Hot-reload single process (tsx --watch)
 
 # Production
-efc build prod                       # Type-check + compile (tsup, dual CJS/ESM)
+efc build prod                       # Type-check + transpile src/ → dist/src/
 efc start prod                       # Run dist/src/index.js with clustering enabled
 
 # Testing
@@ -476,11 +506,20 @@ efc run tests                        # Vitest (--watch, --coverage passthrough)
 efc generate route users/[id]        # → src/api/users/[id].ts
 efc generate task ProcessPayment     # → src/tasks/ProcessPayment.ts
 efc generate middleware authorize    # → src/middlewares/authorize.ts
+efc generate migration add_orders    # → src/migrations/<timestamp>_add_orders.ts
+efc generate seed demo_users         # → src/seeds/demo_users.ts
+
+# Database
+efc db migrate | rollback | status   # Migrations (batches, Postgres advisory lock)
+efc db seed [name]                   # Seed scripts
+efc db studio                        # Read-only browser on 127.0.0.1:4983
 
 # Diagnostics
 efc routes                           # Print resolved route table (path → file → methods)
 efc tasks                            # List registered background tasks
+efc tasks failed | retry | purge     # Dead-letter queue (BullMQ or pg-boss)
 efc doctor                           # Validate config, env vars, DB connectivity
+efc --version
 ```
 
 ---
@@ -537,7 +576,7 @@ ignite({
 | `port` | `number` | `3000` | HTTP listen port |
 | `basePath` | `string` | `'/v1/api'` | URL prefix for all routes |
 | `database` | `'mongodb' \| 'postgresql'` | auto-detected | Database engine |
-| `databaseUrl` | `string` | — | Connection string (MongoDB auto-detected from `mongodb://` prefix) |
+| `databaseUrl` | `string` | — | Connection string — `mongodb://…` or `postgres://…` selects the engine |
 | `authStrategy` | `'http-only' \| 'localStorage'` | `'http-only'` | Token delivery method |
 | `jwtSecret` | `string` | — | JWT signing secret |
 | `jwtExpiresIn` | `string` | `'7d'` | Token lifetime |
@@ -547,6 +586,7 @@ ignite({
 | `tasks` | `TaskConfig \| false` | `false` | Background task runtime |
 | `cors` | `boolean \| CorsConfig` | `true` | CORS configuration |
 | `requestTimeout` | `number` | — | Request timeout in ms (408 on exceed) |
+| `logging` | `LoggingConfig \| false` | pretty in dev TTY, JSON otherwise | pino logging + per-request lines; request IDs always on |
 | `globalMiddlewares` | `RequestHandler[]` | `[]` | Applied to every route |
 | `dashboard` | `boolean` | `true` in dev | Dev route dashboard at `/` |
 | `onWorkerReady` | `(id) => void` | — | Called when a worker boots |
@@ -567,7 +607,7 @@ ignite({
 | `JWT_SECRET` | If using auth | JWT signing key — auto-generated by scaffolder |
 | `JWT_EXPIRES_IN` | No (default `7d`) | Token lifetime |
 | `COOKIE_DOMAIN` | No | Cookie domain for `http-only` auth |
-| `REDIS_URL` | If using BullMQ | Redis connection for the task queue |
+| `REDIS_URL` | If using BullMQ | Redis connection for the task queue (`rediss://`, ACL users, `/db` supported) |
 | `CORS_ORIGINS` | No | Comma-separated allowed origins |
 
 ---
@@ -602,13 +642,13 @@ npm run lint         # ESLint
 | Phase | Status | Focus |
 |---|---|---|
 | **1** | ✅ Complete | Router, clustering, MongoDB, BullMQ, auth, CLI, scaffolder |
-| **2** | ⬜ Planned | `defineModel` upgrades (embedded objects, query options, validators), PostgreSQL (Drizzle), Zod validation, structured logging (`pino`), cron tasks |
-| **3** | ⬜ Planned | Plugins, WebSockets, OpenAPI auto-gen, OpenTelemetry, `efc studio` |
+| **2** | ✅ Complete | PostgreSQL (Drizzle), pg-boss, `defineModel` upgrades, request validation, structured logging, cron tasks, catch-all/optional routes, migrations & studio, dead-letter CLI |
+| **3** | ⬜ Planned | Plugins, WebSockets, OpenAPI auto-gen, OpenTelemetry, testing utilities |
 | **4** | ⬜ Planned | Edge/serverless adapter, gRPC, GraphQL |
 
 See [`todo.md`](./todo.md) for the full implementation checklist.
 
-> **Note:** EFC is architecturally incompatible with Vercel's serverless runtime — it relies on Node.js `cluster`, `server.listen()`, and persistent Redis connections. A serverless adapter is planned for Phase 4.
+> **Note:** EFC is architecturally incompatible with Vercel's serverless runtime — it relies on Node.js `cluster`, `server.listen()`, and persistent database/queue connections. A serverless adapter is planned for Phase 4.
 
 ---
 

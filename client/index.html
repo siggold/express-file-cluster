@@ -77,7 +77,7 @@
     <section class="hero" id="hero">
       <div class="hero-glow"></div>
       <div class="container">
-        <div class="badge">v0.3.16</div>
+        <div class="badge">v0.4.0</div>
         <h1 class="hero-title">
           Express, but your folder<br />
           <span class="accent">is your router.</span>
@@ -626,6 +626,31 @@
           <em>Change</em><span style="font-weight: 600">log</span>
         </h2>
         <div class="changelog-list">
+          <div class="changelog-item">
+            <div class="changelog-meta">
+              <div class="cl-version">express-file-cluster v0.4.0 / create-efc-app v0.5.0</div>
+              <div class="cl-date">Oct 10, 2026</div>
+              <div class="cl-tag">PHASE 2</div>
+            </div>
+            <div class="changelog-content">
+              <h3>PostgreSQL, pg-boss, Validation, Logging, Cron &amp; Migrations</h3>
+              <p>
+                <code>defineModel</code> now runs on PostgreSQL (Drizzle) as well as MongoDB, with one
+                API: embedded objects, field validators, validated updates, sorting and pagination,
+                typed query and update operators, bulk writes, indexes and <code>transaction()</code>.
+                Background tasks can run on <strong>pg-boss</strong> instead of Redis, and both backends
+                support cron <code>schedule</code>s plus <code>efc tasks failed | retry | purge</code>.
+              </p>
+              <p>
+                Routes gain catch-all (<code>[...slug]</code>) and optional (<code>[[id]]</code>)
+                segments and an <code>export const schema</code> for request validation with zod,
+                valibot or arktype. Every request gets an <code>X-Request-Id</code> and structured pino
+                logs. <code>efc db migrate | rollback | seed | studio</code> manages schema and data, and
+                <code>create-efc-app</code> offers PostgreSQL and pg-boss again.
+              </p>
+            </div>
+          </div>
+
           <div class="changelog-item">
             <div class="changelog-meta">
               <div class="cl-version">express-file-cluster v0.3.16 / create-efc-app v0.4.14</div>

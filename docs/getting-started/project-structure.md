@@ -19,6 +19,9 @@ my-api/
 │   ├── model/                     # Engine-agnostic data models
 │   │   ├── User.ts
 │   │   └── Role.ts                # generated if the RBAC option is enabled
+│   ├── migrations/                # efc db migrate — run in filename order
+│   │   └── 00000000000000_init.ts # syncs every generated model
+│   ├── seeds/                     # efc db seed (create with efc generate seed)
 │   └── index.ts                   # Framework entry point
 ├── efc.config.ts                  # Structural configuration
 ├── .env                           # Real secrets — gitignored
@@ -67,9 +70,15 @@ See [Background Tasks](../core-concepts/background-tasks.md).
 
 ## `src/model/` — Data models
 
-Engine-agnostic model definitions using `defineModel()`. On MongoDB this compiles to a real Mongoose-backed model with working CRUD. **On PostgreSQL, scaffolded model files are currently commented-out Drizzle schema stubs** (`export {}`) — the PostgreSQL adapter is not yet implemented in the runtime.
+Engine-agnostic model definitions using `defineModel()` — they compile to a mongoose model on MongoDB or a Drizzle table on PostgreSQL, with the same API on both.
 
 See [Database Guide](../guides/database.md).
+
+---
+
+## `src/migrations/` and `src/seeds/`
+
+Migration files export `up()` / `down()` and run in filename order with `efc db migrate` / `efc db rollback`; seeds export a default function and run with `efc db seed`. Both are loaded from `src/` under `tsx` in development and from `dist/src/` in production. See [Migrations & Seeds](../guides/migrations.md).
 
 ---
 

@@ -22,7 +22,7 @@ Use this skill whenever you're reading, writing, or debugging EFC code. It loads
 | What is exported and from where | [api-surface.md](api-surface.md) |
 | How file paths become URL paths | [routing-rules.md](routing-rules.md) |
 | Worker boot sequence (Pre-Flight) | [pre-flight.md](pre-flight.md) |
-| Background tasks — defineTask, enqueue, thread | [tasks-internals.md](tasks-internals.md) |
+| Background tasks — defineTask, enqueue, thread, cron, pg-boss, dead letters | [tasks-internals.md](tasks-internals.md) |
 | Auth — issueToken, requireAuth internals | [auth-internals.md](auth-internals.md) |
 | Things that do NOT exist (anti-hallucination) | [what-not-to-invent.md](what-not-to-invent.md) |
 
@@ -31,15 +31,15 @@ Load **only** the module the work points to. Each is self-contained.
 ## Project location
 
 ```
-/home/prashant/Projects/temp-nodejs/
+<repo root>/
   packages/core/src/      ← framework source
   packages/create-efc-app/src/  ← scaffolder
   usage/                  ← example app
   docs/                   ← full documentation
 ```
 
-## Status (v0.3.16 — Beta)
+## Status (v0.4.0 — Beta, Phase 2 complete)
 
-Implemented: file-based router, multi-core clustering, http-only + localStorage auth, MongoDB adapter (`mongoose`), BullMQ task queue, worker_threads for CPU-bound tasks, full CLI.
+Implemented: file-based router (incl. `[[id]]`, `[...slug]`, `[[...slug]]`), request validation (`export const schema`, Standard Schema), multi-core clustering with graceful shutdown, http-only + localStorage auth, structured logging (pino, request IDs), `defineModel` on MongoDB (mongoose) **and** PostgreSQL (Drizzle) with validation, query options, bulk ops, transactions, `sync()`/`drop()`, BullMQ **and** pg-boss task backends with cron schedules and dead-letter CLI, worker_threads for CPU-bound tasks, migrations/seeds/studio (`efc db`), full CLI.
 
-**Not yet implemented:** PostgreSQL adapter, pg-boss backend, wildcard/catch-all routes, cron tasks, WebSockets, plugins, OpenAPI.
+**Not yet implemented (Phase 3+):** WebSockets, plugins, OpenAPI generation, OpenTelemetry, `efc lint`, `efc deploy`, schema-diff migration generation.

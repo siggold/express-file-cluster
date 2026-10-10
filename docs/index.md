@@ -2,7 +2,7 @@
 
 **express-file-cluster (EFC)** is an opinionated backend framework built on Express. It removes routing ceremony, saturates every CPU core automatically, and ships a production-grade background-task subsystem — all from a single `ignite()` call.
 
-> **Status: v0.3.16 — Beta.** The router, clustering, auth, MongoDB adapter, and BullMQ task queue are implemented. PostgreSQL and the pg-boss task backend are scaffolded as choices but not yet implemented in the runtime.
+> **Status: v0.4.0 — Beta.** File-based routing (incl. catch-all and optional segments), request validation, clustering, auth, structured logging, MongoDB and PostgreSQL models, BullMQ and pg-boss tasks with cron and dead-letter tooling, and migrations are all implemented.
 
 ---
 
@@ -12,8 +12,10 @@
 |---|---|
 | Route registration boilerplate | The file tree **is** the route tree |
 | Single-threaded Node under load | CPU-count auto-detection → worker processes |
-| Blocking work on the request path | `enqueue()` ships it off-path with retries |
+| Blocking work on the request path | `enqueue()` ships it off-path with retries; `schedule` runs it on cron |
 | Wiring DB, auth, and middleware by hand | `ignite()` bootstraps everything in one call |
+| Different code per database | `defineModel` runs the same on MongoDB and PostgreSQL |
+| Hand-rolled input checks | `export const schema` validates params, query and body |
 
 ---
 
@@ -34,7 +36,10 @@
 |---|---|
 | [Authentication](./guides/authentication.md) | JWT strategies, login/logout, `requireAuth` |
 | [RBAC](./guides/rbac.md) | Role-based route protection via the `requireAuth('role')` shorthand |
-| [Database](./guides/database.md) | `defineModel`, CRUD, MongoDB vs PostgreSQL status |
+| [Database](./guides/database.md) | `defineModel`, queries, transactions, MongoDB vs PostgreSQL |
+| [Migrations & Seeds](./guides/migrations.md) | `efc db migrate / rollback / seed / studio` |
+| [Validation](./guides/validation.md) | Route `schema` exports with zod, valibot, arktype |
+| [Logging](./guides/logging.md) | pino, request IDs, `getLogger()` |
 | [Generated Portals](./guides/generated-portals.md) | Every model and route `create-efc-app` scaffolds for the User/Admin portals |
 | [Mailer](./guides/mailer.md) | Gmail (app password) and custom SMTP setup, sending email from a task |
 | [Environment Variables](./guides/environment-variables.md) | Full `.env` reference |

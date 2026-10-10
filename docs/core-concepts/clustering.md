@@ -37,13 +37,14 @@ Every worker runs these steps in order before accepting any connections:
 
 | Step | What happens |
 |---|---|
-| 1. Connect Database | Establishes this worker's own connection pool to MongoDB. (PostgreSQL is a selectable choice but not yet implemented in the runtime.) |
+| 0. Configure logging | Applies `logging` — every later line carries the worker label (`w<N>`). |
+| 1. Connect Database | Establishes this worker's own connection pool to MongoDB or PostgreSQL, and selects what `defineModel` compiles to. |
 | 2. Configure Auth | Wires the JWT secret, strategy, and cookie options into the auth module. |
 | 3. Scan tasks | Walks `src/tasks/` and registers every `defineTask` export in the task registry. |
-| 4. Start task backend | Connects to Redis (BullMQ) and starts the queue worker with configured concurrency. |
+| 4. Start task backend | Connects BullMQ (Redis) or pg-boss (PostgreSQL), starts the queue worker and reconciles cron schedules. |
 | 5. Scan routes | Walks `src/api/` and builds the `RouteEntry[]` array. |
 | 6. Mount routes | Dynamically imports each route module and registers handlers on Express. |
-| 7. Listen | Starts the HTTP server and logs `[EFC] Worker <id> listening on :<port>`. |
+| 7. Listen | Starts the HTTP server and logs `Worker <id> listening on :<port>`. |
 
 Each worker owns its own database connection pool. There is no shared mutable state across workers.
 
@@ -103,8 +104,8 @@ ignite(config)
   .then(gracefulShutdown);
 ```
 
-- On a **worker**: calls `server.closeIdleConnections()`, then `server.close()`. Forces exit after a 10-second timeout.
-- On the **master** (when `ignite()` returns `undefined`): calls `shutdownMaster()` which sets a flag — the master stops forking new workers when they exit, and exits itself once all workers have drained.
+- On a **worker**: calls `server.closeIdleConnections()`, then `server.close()` (in-flight requests finish), drains running task jobs, and exits `0`. Forces exit after a 10-second timeout. Repeated signals are ignored rather than killing it mid-drain.
+- On the **primary** (when `ignite()` returns `undefined`): stops respawning, **relays `SIGTERM` to every worker** — orchestrators such as `docker stop` and Kubernetes signal only PID 1 — and exits once all workers have drained, or force-exits after the timeout + 2 s.
 
 Pass a custom timeout (milliseconds) as the second argument:
 

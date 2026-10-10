@@ -4,7 +4,7 @@
 
 EFC is an opinionated backend framework built on Express. Drop files in `src/api/` and they become routes. Every CPU core serves traffic automatically. Heavy work goes to a queue-backed task subsystem so requests stay fast.
 
-> **Status: v0.3.16 (Beta).** The router, clustering, auth, MongoDB adapter, and BullMQ task queue backend are all implemented.
+> **Status: v0.4.0 (Beta).** Router (incl. catch-all/optional segments and request validation), clustering, auth, structured logging, `defineModel` on MongoDB and PostgreSQL, BullMQ and pg-boss tasks with cron, and migrations are all implemented.
 
 ---
 
@@ -201,24 +201,24 @@ export const Audit = defineModel<AuditDocument>('Audit', schema, {
 });
 ```
 
-### CRUD surface
+### Model API — identical on MongoDB and PostgreSQL
 
 ```ts
-await User.find({ role: 'admin' });            // find all matching
-await User.findById('66a1...');                // by _id
-await User.findOne({ email: 'a@b.com' });      // first match
-await User.create({ name: 'Alice', ... });     // insert
-await User.update('66a1...', { name: 'Bob' }); // findOneAndUpdate
-await User.delete('66a1...');                  // remove
-await User.count({ role: 'user' });            // count matching
+await User.find({ role: { $in: ['admin', 'editor'] }, 'address.city': 'Oslo' },
+                { sort: { createdAt: -1 }, limit: 20, skip: 20, select: ['name'], populate: 'team' });
+await User.findById(id);                         // malformed id → null
+await User.findOne({ email: 'a@b.com' });
+await User.create({ name: 'Alice' });            // validated (400 ModelValidationError / 409 duplicate)
+await User.createMany([...]);
+await User.update(id, { $inc: { logins: 1 } });  // validated too
+await User.updateMany(filter, update);           // → count
+await User.delete(id);
+await User.deleteMany(filter);                   // → count
+await User.count(filter);
+await transaction(async () => { /* model calls here share one transaction */ });
 ```
 
-Populate references:
-
-```ts
-await Post.find({}, { populate: 'author' });
-await Post.findById(id, { populate: ['author', 'comments.user'] });
-```
+The engine follows `DATABASE_URL` (`mongodb://` → mongoose, `postgres://` → Drizzle; install `mongoose` or `pg drizzle-orm`). Tables and indexes come from `Model.sync()` in a migration — `efc db migrate`. MongoDB-only extras: `aggregate()`, TTL indexes. `Model.raw()` returns the native mongoose model / Drizzle table.
 
 ---
 
@@ -269,9 +269,10 @@ Task options:
 | `retries` | `3` | Re-runs after a failure (up to `retries + 1` attempts) before dead-lettering |
 | `backoff` | `'exponential'` | Delay strategy between retries |
 | `concurrency` | `tasks.concurrency` | Parallel jobs for this task |
-| `schedule` | — | Cron expression (accepted, not executed yet — planned) |
+| `schedule` | — | Cron pattern for recurring runs (payload `{}`) |
+| `timezone` | server time | IANA timezone for `schedule` |
 
-> `enqueue()` fails fast on an unknown task name, but currently has no timeout of its own if the queue backend (Redis) is unreachable — wrap it yourself if you need one.
+Backends: `tasks: { backend: 'bullmq', redisUrl }` or `tasks: { backend: 'pg-boss' }` (jobs in your PostgreSQL). `enqueue()` rejects after `tasks.enqueueTimeout` (default 5 s) instead of hanging when the backend is down. Dead letters: `efc tasks failed | retry | purge`.
 
 ---
 
@@ -380,6 +381,7 @@ ignite({
 | `tasks` | `TaskConfig \| false` | `false` | Background task runtime |
 | `cors` | `boolean \| CorsConfig` | `true` | CORS — pass `origin` explicitly, not auto-read from env |
 | `requestTimeout` | `number` | — | Request timeout in ms (408 on exceed) |
+| `logging` | `LoggingConfig \| false` | pretty in dev TTY, JSON otherwise | pino logging; every request gets an `X-Request-Id` |
 | `globalMiddlewares` | `RequestHandler[]` | `[]` | Applied to every route |
 | `dashboard` | `boolean` | `true` in dev | Dev route dashboard at `/` |
 | `onWorkerReady` | `(id) => void` | — | Called when a worker boots |
@@ -405,10 +407,18 @@ efc run tests         # Vitest  (--watch, --coverage passthrough)
 efc generate route users/[id]       # → src/api/users/[id].ts
 efc generate task ProcessPayment    # → src/tasks/ProcessPayment.ts
 efc generate middleware authorize   # → src/middlewares/authorize.ts
+efc generate migration add_orders   # → src/migrations/<timestamp>_add_orders.ts
+efc generate seed demo_users        # → src/seeds/demo_users.ts
+
+# Database
+efc db migrate | rollback | status  # Migrations
+efc db seed [name]                  # Seeds
+efc db studio                       # Read-only browser on 127.0.0.1
 
 # Diagnostics
 efc routes            # Print resolved route table (path → file → methods)
 efc tasks             # List registered background tasks
+efc tasks failed | retry | purge    # Dead-letter queue
 efc doctor            # Validate project setup, package.json/tsconfig, .env vars
 ```
 

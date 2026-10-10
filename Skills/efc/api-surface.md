@@ -20,163 +20,154 @@ import { ... } from 'express-file-cluster/tasks'     // tasks module
 
 Source: `packages/core/src/index.ts`
 
-### Functions
+### Functions & values
 
 ```ts
-// Boot the framework — returns http.Server in worker, undefined in master
-async function ignite(config: EFCConfig): Promise<http.Server | undefined>
-
-// Register SIGTERM/SIGINT handlers for clean shutdown
+async function ignite(config: EFCConfig): Promise<http.Server | undefined> // undefined on the cluster primary
 function gracefulShutdown(server: http.Server | undefined, timeoutMs?: number): void
-
-// Chain middleware handlers into one RequestHandler
 function compose(...handlers: RequestHandler[]): RequestHandler
 
-// Raw database client proxy (thread-local, set during Pre-Flight)
-const db: AnyClient  // Proxy — throws if accessed before Pre-Flight
+// Models — one API on MongoDB (mongoose) and PostgreSQL (Drizzle); engine picked at first use
+function defineModel<T extends object>(name: string, schema: ModelSchema, options?: ModelOptions): ModelCRUD<T>
+async function transaction<T>(fn: () => Promise<T>): Promise<T> // model calls inside join automatically
+class ModelValidationError extends HttpError { issues: { path: string; message: string }[] } // status 400
 
-// Low-level: set/get the db client (used by EFC internally)
+// Native client from Pre-Flight: mongoose Connection (MongoDB) or pg Pool (PostgreSQL)
+const db: AnyClient // Proxy — throws before Pre-Flight; methods are bound to the real client
 function setDbClient(client: Record<string, unknown>): void
 function getDbClient(): Record<string, unknown>
 
-// Create an engine-agnostic model
-function defineModel<T>(name: string, schema: ModelSchema, options?: ModelOptions): ModelCRUD<T>
+// Logging (pino)
+const logger: Logger           // proxy for getLogger()
+function getLogger(): Logger   // request-scoped child (carries reqId) inside a request, root otherwise
 
-// Scan a directory and return route entries (used internally by ignite)
-function scanDir(dir: string, base?: string): RouteEntry[]
+function scanDir(dir: string, base?: string, maxDepth?: number): RouteEntry[]
+function listTasks(): ReadonlyArray<{ name: string; options: TaskOptions }>
+function workerCount(): number
+class HttpError extends Error { readonly statusCode: number; static from(err, status?, fallback?): HttpError }
+function isHttpError(value: unknown): value is HttpError
 ```
 
-### Classes
+### Config types
 
 ```ts
-class HttpError extends Error {
-  readonly statusCode: number;
-  constructor(statusCode: number, message: string);
-  name: 'HttpError';
-}
-```
-
-### Types
-
-```ts
-type DatabaseEngine = 'mongodb' | 'postgresql';
-type AuthStrategy = 'http-only' | 'localStorage';
-type TaskBackend = 'bullmq' | 'pg-boss';
-
-interface TaskConfig {
-  backend: TaskBackend;
-  redisUrl?: string;
-  concurrency?: number;
-}
-
-interface CorsConfig {
-  origin?: string | string[] | boolean;
-  methods?: string | string[];
-  allowedHeaders?: string | string[];
-  credentials?: boolean;
-  maxAge?: number;
-}
-
 interface EFCConfig {
-  port?: number;
-  apiDir: string;           // REQUIRED
-  tasksDir?: string;
-  database?: DatabaseEngine;
+  port?: number;                    // default 3000
+  basePath?: string;                // default '/v1/api'
+  dashboard?: boolean;              // dev-only route docs at '/'
+  database?: 'mongodb' | 'postgresql'; // default: inferred from databaseUrl scheme
   databaseUrl?: string;
-  authStrategy?: AuthStrategy;
+  authStrategy?: 'http-only' | 'localStorage';
   jwtSecret?: string;
-  cluster?: boolean;
-  workers?: number;
+  jwtExpiresIn?: string;            // default '7d'
+  cookieDomain?: string;
+  cluster?: boolean;                // default NODE_ENV === 'production'
+  workers?: number;                 // default os.cpus().length
   tasks?: TaskConfig | false;
-  cors?: boolean | CorsConfig;
+  cors?: boolean | CorsConfig;      // default true
+  requestTimeout?: number;          // ms → 408
+  logging?: LoggingConfig | false;
   globalMiddlewares?: RequestHandler[];
   onWorkerReady?: (id: number) => void;
   onWorkerCrash?: (id: number, code: number) => void;
   onError?: ErrorRequestHandler;
 }
+// NOTE: there is NO apiDir / tasksDir option — src/api and src/tasks are found by convention.
 
-interface RouteEntry {
-  urlPath: string;
-  filePath: string;
-  params: string[];
+interface TaskConfig {
+  backend: 'bullmq' | 'pg-boss';
+  redisUrl?: string;          // BullMQ, default redis://localhost:6379
+  connectionString?: string;  // pg-boss, default databaseUrl
+  schema?: string;            // pg-boss, default 'pgboss'
+  concurrency?: number;       // default 5
+  enqueueTimeout?: number;    // default 5000 ms — enqueue() rejects instead of hanging
+  queue?: string;             // default 'efc'
 }
 
-interface TaskOptions {
-  thread?: boolean;
-  retries?: number;
-  backoff?: 'fixed' | 'exponential';
-  concurrency?: number;
-  schedule?: string;
+interface LoggingConfig {
+  level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent'; // default 'info'
+  pretty?: boolean;   // default: non-production TTY
+  requests?: boolean; // default true
 }
+```
 
-interface TaskDefinition<TPayload = unknown> {
-  handler: (payload: TPayload) => Promise<void>;
-  options: TaskOptions;
-  name: string;
-  filePath?: string;
-}
+### Route file exports
 
+```ts
+export const GET | POST | PUT | PATCH | DELETE | HEAD | OPTIONS = async (req, res) => {}
+export const middlewares: RequestHandler[]
+export const schema: RouteSchema   // { params?, query?, body? } or keyed by method
+export const meta: RouteMeta       // dashboard docs, keyed by method
+
+type Validator = { '~standard': { validate } } | { safeParse }  // Standard Schema (zod ≥3.24, valibot, arktype)
+interface RequestSchema { params?: Validator; query?: Validator; body?: Validator }
+type RouteSchema = RequestSchema | Partial<Record<string, RequestSchema>>
+// Failure → 400 { error: 'Validation failed', statusCode: 400, issues: [{ location, path, message }] }
+// Success → parsed output replaces req.params/query/body. Runs AFTER file middlewares.
+```
+
+`req.id` (request ID) and `req.log` (request logger) are added to Express's `Request` type.
+
+### Model types
+
+```ts
 type PrimitiveFieldType = 'string' | 'number' | 'boolean' | 'date' | 'object' | 'objectId';
 
 interface FieldDefinition {
   type: PrimitiveFieldType | 'array';
-  required?: boolean;
-  unique?: boolean;
-  default?: unknown;                    // literal value, OR a DefaultOperator sentinel string (below)
-  enum?: readonly (string | number)[];  // valid on 'string'/'number' types
-  ref?: string;                         // Mongoose model name; valid on 'objectId' types
-  of?: PrimitiveFieldType;              // item type for 'array' fields, e.g. { type: 'array', of: 'string' }
-  sequence?: boolean | string;          // auto-increment via a counters collection — see below
+  required?: boolean; unique?: boolean; index?: boolean;
+  default?: unknown;                         // literal, function, or DefaultOperator
+  enum?: readonly (string | number)[];
+  min?: number | Date; max?: number | Date;  // number, date
+  minLength?: number; maxLength?: number;    // string
+  match?: RegExp;                            // string
+  validate?: (v: unknown) => boolean | string | Promise<boolean | string>; // string = error message
+  ref?: string;                              // objectId / objectId arrays → populate
+  of?: PrimitiveFieldType | ModelSchema;     // array item: primitive or embedded doc schema
+  fields?: ModelSchema;                      // typed embedded object (type: 'object')
+  sequence?: boolean | string;               // auto-increment; Mongo efc_counters / PG SEQUENCE
 }
 
-// Sentinel default-value codes resolved at schema-compile time to a generator
-// function, so each document gets a freshly-computed value:
-//   '$now'              → new Date()                       — pair with type: 'date'
-//   '$uuid'              → crypto.randomUUID()               — pair with type: 'string'
-//   '$objectId'          → new mongoose.Types.ObjectId()     — pair with type: 'objectId'
-//   '$timestamp'         → Date.now() (number, epoch ms)     — pair with type: 'number'
-//   '$shortId'           → random 16-char base64url string   — pair with type: 'string'
-//   '$currentUser'       → getCurrentUser() (auth payload)   — pair with type: 'object'
-//   '$currentUser.<key>' → getCurrentUser()?.[key]           — e.g. '$currentUser.id'
-// Any other string/value passed to `default` is used as-is.
-type DefaultOperator =
-  | '$now' | '$uuid' | '$objectId' | '$timestamp' | '$shortId'
-  | '$currentUser' | `$currentUser.${string}`;
+// A field: FieldDefinition | nested ModelSchema (embedded object shorthand) | [ModelSchema] (array of embedded docs)
+type SchemaField = FieldDefinition | ModelSchema | [ModelSchema];
+interface ModelSchema { [field: string]: SchemaField }
 
-// '$increment' is NOT a DefaultOperator — default resolution is synchronous, and an
-// auto-increment counter needs an async read-modify-write against a counters
-// collection. Use FieldDefinition.sequence instead:
-//   { orderNumber: { type: 'number', sequence: true, required: true } }
-// `sequence: true` keys the counter as '<ModelName>.<field>'; a string sets an
-// explicit shared key. Assigned in a pre('validate') hook (before `required` runs),
-// only on new docs, only if not already set. Top-level fields only — not inside
-// nested array sub-schemas. Counter storage: internal 'efc_counters' collection,
-// incremented atomically ($inc + upsert).
+type DefaultOperator = '$now' | '$uuid' | '$objectId' | '$timestamp' | '$shortId' | '$currentUser' | `$currentUser.${string}`;
+// '$increment' is NOT an operator — use `sequence`.
 
 interface ModelOptions {
-  // Passed straight through to mongoose's `timestamps` schema option.
-  // Default: true (matches the framework's previous hardcoded behavior).
-  timestamps?: boolean | { createdAt?: string | false; updatedAt?: string | false };
+  timestamps?: boolean | { createdAt?: string | false; updatedAt?: string | false }; // default true
+  indexes?: { fields: Record<string, 1 | -1 | 'text'>; unique?: boolean; expireAfterSeconds?: number; name?: string }[];
+  collection?: string; // collection/table name, default lowercase plural of the model name
 }
 
-// A field is either a FieldDefinition, or a one-element tuple holding a nested ModelSchema —
-// the latter defines an array of embedded sub-documents:
-// route_progress: [{ route_id: { type: 'string' }, visited: { type: 'boolean' } }]
-type ModelSchema = Record<string, FieldDefinition | [ModelSchema]>;
+interface FindOptions { populate?: string | string[]; select?: string[]; sort?: Record<string, 1 | -1 | 'asc' | 'desc'>; limit?: number; skip?: number }
 
-interface ModelQueryOptions {
-  populate?: string | string[]; // Mongoose .populate() path(s) for objectId/ref fields
-}
+// Filter<T>: equality (array fields: contains), $eq $ne $gt $gte $lt $lte $in $nin $exists $regex,
+//            $and / $or, dotted paths ('address.city'), `id` for the primary key. Typed — no casts.
+// Update<T>: plain fields (= $set) and/or $set (dotted ok) $inc $push ({$each}) $pull $unset.
 
-interface ModelCRUD<T extends Record<string, any>> {
-  find(filter?: Partial<T>, options?: ModelQueryOptions): Promise<(T & { id: string })[]>;
-  findById(id: string, options?: ModelQueryOptions): Promise<(T & { id: string }) | null>;
-  findOne(filter: Partial<T>, options?: ModelQueryOptions): Promise<(T & { id: string }) | null>;
-  create(data: Partial<T>): Promise<T & { id: string }>;
-  update(id: string, data: Partial<T>): Promise<(T & { id: string }) | null>;
+interface ModelCRUD<T> {
+  readonly name: string;
+  find(filter?: Filter<T>, options?: FindOptions): Promise<ModelRecord<T>[]>;
+  findById(id: string, options?: ModelQueryOptions): Promise<ModelRecord<T> | null>; // malformed id → null
+  findOne(filter: Filter<T>, options?: ModelQueryOptions): Promise<ModelRecord<T> | null>;
+  create(data: Partial<T>): Promise<ModelRecord<T>>;
+  createMany(data: Partial<T>[]): Promise<ModelRecord<T>[]>;
+  update(id: string, data: Update<T>): Promise<ModelRecord<T> | null>;  // VALIDATES changed fields
+  updateMany(filter: Filter<T>, data: Update<T>): Promise<number>;
   delete(id: string): Promise<void>;
-  count(filter?: Partial<T>): Promise<number>;
+  deleteMany(filter: Filter<T>): Promise<number>;
+  count(filter?: Filter<T>): Promise<number>;
+  aggregate<R>(pipeline: object[]): Promise<R[]>;  // MongoDB only — rejects on PostgreSQL
+  raw(): Promise<unknown>;                          // mongoose Model / Drizzle pgTable
+  sync(): Promise<void>;                            // create table/collection, add columns, indexes — never drops
+  drop(): Promise<void>;
 }
+type ModelRecord<T> = T & { id: string };
+// Errors: ModelValidationError (400, issues), duplicate unique → HttpError 409.
+
+interface MigrationContext { db: unknown; engine: 'mongodb' | 'postgresql' } // passed to up/down/seed
 ```
 
 ---
@@ -225,19 +216,26 @@ Every request run through `ignite()` is wrapped in its own `AsyncLocalStorage` c
 Source: `packages/core/src/tasks/index.ts`
 
 ```ts
-// Create a task definition (two overloads)
 function defineTask<T>(handler: (payload: T) => Promise<void>): TaskDefinition<T>
 function defineTask<T>(options: TaskOptions, handler: (payload: T) => Promise<void>): TaskDefinition<T>
 
-// Add a job to the queue
+// Rejects: backend not configured | unknown task | backend unreachable within tasks.enqueueTimeout
 async function enqueue<T>(name: string, payload: T): Promise<void>
 
-// Internal — used by BullMQ backend
+interface TaskOptions {
+  thread?: boolean;                    // run in worker_threads
+  retries?: number;                    // re-runs; up to retries + 1 attempts. Default 3
+  backoff?: 'fixed' | 'exponential';   // 1 s base. Default 'exponential'
+  concurrency?: number;
+  schedule?: string;                   // cron; scheduled runs get payload {}
+  timezone?: string;                   // IANA tz for schedule
+}
+
+// Internal
 function registerTask(name: string, def: TaskDefinition): void
 function setEnqueueImpl(impl: (name: string, payload: unknown) => Promise<void>): void
-
-// In-memory registry (Map<string, TaskDefinition>)
 const taskRegistry: Map<string, TaskDefinition>
+function listTasks(): ReadonlyArray<{ name: string; options: TaskOptions }>
 ```
 
 ---
@@ -255,5 +253,6 @@ const taskRegistry: Map<string, TaskDefinition>
 | `cookieDomain` | `process.env.COOKIE_DOMAIN` | unset (host-only cookie) |
 | `cors.origin` | `process.env.CORS_ORIGINS?.split(',')` | `true` (allow all) |
 | `tasks.redisUrl` | `process.env.REDIS_URL` | `'redis://localhost:6379'` |
+| `tasks.connectionString` (pg-boss) | — | `databaseUrl` |
 
 `NODE_ENV` is the sole exception — a Node/Express-wide runtime-mode signal, not an app secret — and is still read directly via `process.env['NODE_ENV']` in three places: `ignite()`'s cluster-in-production default, the dev-only dashboard toggle, and the `http-only` auth strategy's cookie `Secure` flag.

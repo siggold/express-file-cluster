@@ -58,10 +58,39 @@ Any `throw` that is not an `HttpError` (e.g. a database error, a null pointer, a
 }
 ```
 
-The original error is logged to `stderr`:
+The original error is logged at `error` level with the request ID and stack (see [Logging](./logging.md)):
 
 ```
-[EFC] Unhandled error: TypeError: Cannot read properties of null
+12:00:01 ERROR [w1] 3f9c2a1b Unhandled error
+TypeError: Cannot read properties of null
+    at GET (src/api/users/[id].ts:8:21)
+```
+
+---
+
+## Validation and database errors
+
+These arrive as `HttpError` subclasses, so they need no handling in route code:
+
+| Source | Status | Body |
+|---|---|---|
+| Route `schema` rejects the request | `400` | `{ "error": "Validation failed", "statusCode": 400, "issues": [{ "location", "path", "message" }] }` |
+| `defineModel` write fails validation (`ModelValidationError`) | `400` | `{ "error": "User validation failed: email: is required", "statusCode": 400, "issues": [{ "path", "message" }] }` |
+| Duplicate value of a `unique` field | `409` | `{ "error": "User with this email already exists", "statusCode": 409 }` |
+
+Catch `ModelValidationError` only when you want to react differently:
+
+```ts
+import { ModelValidationError } from 'express-file-cluster';
+
+try {
+  await User.create(req.body);
+} catch (err) {
+  if (err instanceof ModelValidationError && err.issues.some((i) => i.path === 'email')) {
+    throw new HttpError(422, 'Please provide a valid email');
+  }
+  throw err;
+}
 ```
 
 ---
@@ -118,13 +147,14 @@ export function validateBody(schema: z.ZodType): RequestHandler {
 
 ## Errors in tasks
 
-Task errors do not crash the application. The BullMQ backend catches failed jobs, retries them according to `retries` and `backoff` options, and dead-letters them after the retry limit:
+Task errors do not crash the application. The backend (BullMQ or pg-boss) catches failed jobs, retries them according to `retries` and `backoff`, and dead-letters them after the last attempt. Each failure is logged with the task, job ID and attempt:
 
 ```
-[EFC] Task SendEmail failed: Error: SMTP connection refused
+12:00:01 ERROR [w2] Task SendEmail failed task=SendEmail jobId=1842 attempt=2
+Error: SMTP connection refused
 ```
 
-After all retries are exhausted, the job moves to the BullMQ failed set. You can inspect it with a BullMQ dashboard (e.g. Bull Board).
+Inspect, retry or purge dead-lettered jobs with `efc tasks failed | retry | purge` — see [Background Tasks › Dead letters](../core-concepts/background-tasks.md#dead-letters).
 
 ---
 
@@ -135,4 +165,8 @@ After all retries are exhausted, the job moves to the BullMQ failed set. You can
 | `throw new HttpError(N, msg)` | `N` | `{ "error": msg, "statusCode": N }` |
 | Any other thrown error | `500` | `{ "error": "Internal Server Error", "statusCode": 500 }` |
 | Method not implemented | `405` | `{ "error": "Method Not Allowed" }` + `Allow` header |
+| Route `schema` validation failed | `400` | `{ "error": "Validation failed", "statusCode": 400, "issues": [...] }` |
+| Model validation failed | `400` | `{ "error": "...", "statusCode": 400, "issues": [...] }` |
+| Unique constraint violated | `409` | `{ "error": "<Model> with this <field> already exists", "statusCode": 409 }` |
+| `requestTimeout` exceeded | `408` | `{ "error": "Request Timeout", "statusCode": 408 }` |
 | Missing/invalid auth token | `401` | `{ "error": "Unauthorized" }` |

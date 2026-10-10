@@ -14,11 +14,12 @@ These are the variables the **scaffolded** `efc.config.ts` reads. If you hand-wr
 |---|---|---|---|
 | `PORT` | No | `3000` | `config.port` |
 | `NODE_ENV` | No | — | Read directly by the framework (not via config) — see [Precedence](#precedence). |
-| `DATABASE_URL` | Yes (if using a database) | — | `config.databaseUrl`. Format determines the engine: `mongodb://...` or `postgres://...` |
+| `DATABASE_URL` | Yes (if using a database) | — | `config.databaseUrl`. Format determines the engine: `mongodb://...` or `postgres://...`. Also used by pg-boss and by `efc db` / `efc tasks` commands. |
 | `JWT_SECRET` | Yes (if using auth) | — | `config.jwtSecret`. Generate with `openssl rand -hex 64`. |
 | `JWT_EXPIRES_IN` | No | `7d` | `config.jwtExpiresIn`. Accepts `15m`, `1h`, `7d`, `30d`, etc. |
 | `COOKIE_DOMAIN` | No | — | `config.cookieDomain`. Blank for localhost. |
-| `REDIS_URL` | If tasks use BullMQ | `redis://localhost:6379` | `config.tasks.redisUrl`. |
+| `REDIS_URL` | If tasks use BullMQ | `redis://localhost:6379` | `config.tasks.redisUrl`. Supports `rediss://` (TLS), ACL users and `/db`. Omitted for pg-boss projects — `efc tasks failed` picks BullMQ when it's set. |
+| `EFC_DEBUG` | No | — | `1` makes `efc db` commands print full stack traces on failure. |
 | `CORS_ORIGINS` | No | (all allowed) | `config.cors.origin` (comma-separated list, split into an array). Example: `http://localhost:3000,https://myapp.com` |
 | `APP_URL` | If Mailer enabled | `http://localhost:3000` | Read directly in task/route code that builds email links (e.g. `${APP_URL}/auth/verify-email?token=...`) — not part of `EFCConfig`. |
 | `SMTP_HOST` | If Mailer enabled | `smtp.gmail.com` | Read directly by the generated mailer task — not part of `EFCConfig`. |

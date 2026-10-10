@@ -138,7 +138,35 @@ Defaults: `host: 'localhost'`, `port: 6379`. User/password are URI-decoded.
 ## What `tasks` in `ignite()` does NOT do
 
 - Does NOT start a dedicated task-runner process — tasks run inside each worker process.
-- Does NOT auto-retry on `enqueue` failure — `enqueue` itself doesn't retry; BullMQ handles job-level retries.
-- On `gracefulShutdown()`, the HTTP server closes first, then `closeBullMQ()` drains the worker (in-flight jobs finish) before exit.
-- Does NOT provide a dead-letter UI — use a BullMQ dashboard (e.g. Bull Board) for that.
+- Does NOT auto-retry on `enqueue` failure — `enqueue` itself doesn't retry; the backend handles job-level retries.
+- On `gracefulShutdown()`, the HTTP server closes first, then `closeBullMQ()` / `closePgBoss()` drain in-flight jobs before exit.
+- Does NOT provide a dead-letter web UI — use `efc tasks failed | retry | purge` (or Bull Board).
 - Does NOT support sub-directories in `tasksDir`.
+
+---
+
+## Cron schedules
+
+`defineTask({ schedule: '<cron>', timezone?: '<IANA>' }, handler)`. Reconciled on every boot:
+
+- **BullMQ**: `queue.upsertJobScheduler('efc-cron:<Task>', { pattern, tz }, { name, data: {}, opts })` — idempotent,
+  so every cluster worker can run it. Schedulers with the `efc-cron:` prefix whose task lost its schedule are
+  removed. Sync is not awaited (`whenSchedulesSynced()` exposes it for tests). 6-field patterns (seconds) work.
+- **pg-boss**: `boss.schedule('<queue>.<Task>', cron, {}, { tz, retry… })`; stale `<queue>.*` schedules are
+  `unschedule`d. One-minute resolution.
+- Scheduled runs always receive `{}` as payload.
+
+## pg-boss backend (`tasks/pgboss-backend.ts`)
+
+- `new PgBoss({ connectionString: tasks.connectionString ?? databaseUrl, schema? })`, `start()`.
+- One pg-boss queue per task, named `<tasks.queue>.<TaskName>` (default prefix `efc`); `createQueue` is idempotent.
+- `retryLimit = retries` (pg-boss counts re-runs, like EFC), `retryDelay: 1`, `retryBackoff` for exponential.
+- Non-object payloads are boxed as `{ __efcValue: payload }` and unboxed for the handler.
+- `enqueue` = `boss.send(...)` raced against `enqueueTimeout`.
+
+## Dead letters (`tasks/admin.ts`, CLI `efc tasks failed|retry|purge`)
+
+`TaskAdmin` = `counts()`, `listFailed({ limit, name })`, `retry(ids)`, `purge(ids)` (empty ids = all).
+BullMQ: `queue.getFailed`, `job.retry('failed')`, `job.remove()`. pg-boss: reads `pgboss.job WHERE state='failed'`,
+then `boss.retry` / `boss.deleteJob`. A retried job gets exactly one more attempt on both backends.
+CLI picks BullMQ when `REDIS_URL` is set, else pg-boss for a `postgres` `DATABASE_URL`; `--backend/--queue` override.

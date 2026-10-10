@@ -57,6 +57,7 @@ interface TaskOptions {
   backoff?: 'fixed' | 'exponential';
   concurrency?: number;
   schedule?: string;
+  timezone?: string;
 }
 ```
 
@@ -66,7 +67,8 @@ interface TaskOptions {
 | `retries` | `number` | `3` | Re-runs after the first failed attempt, so a job runs at most `retries + 1` times before it is dead-lettered. |
 | `backoff` | `'fixed' \| 'exponential'` | `'exponential'` | Retry delay strategy. Exponential starts at 1 second and doubles. |
 | `concurrency` | `number` | `tasks.concurrency` from `ignite()` | Maximum parallel jobs of this type. |
-| `schedule` | `string` | — | Cron expression for recurring execution (planned in Phase 2). |
+| `schedule` | `string` | — | Cron pattern, e.g. `'*/15 * * * *'`. Scheduled runs receive `{}` as the payload. |
+| `timezone` | `string` | server time | IANA timezone for `schedule`. |
 
 ---
 
@@ -97,7 +99,7 @@ await enqueue('SendEmail', {
 
 - **Task backend not initialised** — `tasks` was not configured in `ignite()`.
 - **Unknown task name** — no file with that basename exists in `src/tasks/`.
-- **Redis is unreachable** — the job could not be added within `tasks.enqueueTimeout` (default 5000 ms). It never waits indefinitely, and a rejected job is not queued later behind your back, so it is safe to retry or return a 503.
+- **The queue backend is unreachable** — Redis (BullMQ) or PostgreSQL (pg-boss) didn't accept the job within `tasks.enqueueTimeout` (default 5000 ms). It never waits indefinitely, and a rejected job is not queued later behind your back, so it is safe to retry or return a 503.
 
 ```ts
 try {

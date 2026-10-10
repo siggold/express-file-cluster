@@ -96,6 +96,19 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   });
   app.use(requestLogger());
 
+  if (config.requestTimeout) {
+    const ms = config.requestTimeout;
+    app.use((_req, res, next) => {
+      const timer = setTimeout(() => {
+        if (!res.headersSent) res.status(408).json({ error: 'Request Timeout', statusCode: 408 });
+      }, ms);
+      const clear = () => clearTimeout(timer);
+      res.once('finish', clear);
+      res.once('close', clear);
+      next();
+    });
+  }
+
   const corsOption = config.cors ?? true;
   if (corsOption !== false) {
     const origin =
@@ -182,6 +195,11 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   } else {
     app.use(
       (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+        // e.g. a handler that kept going after requestTimeout already answered 408.
+        if (res.headersSent) {
+          getLogger().warn({ err }, 'Error after the response was sent');
+          return;
+        }
         // isHttpError() covers the common case, but errors can also arrive as plain
         // objects with a numeric statusCode (e.g. thrown across a module boundary, or
         // duck-typed by user code) — fall back to that shape before giving up to 500.

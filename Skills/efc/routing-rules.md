@@ -11,10 +11,18 @@ scan.ts: filePathToUrlPath(relativePath)
 
 1. Strip extension   (.ts | .js | .mts | .mjs | .cts | .cjs)
 2. Strip /index      (trailing /index becomes '')
-3. Replace [param]   → :param  (regex: /\[([^\]]+)\]/g)
+3. Per segment:
+     [[...name]] → :name*?   optional catch-all  (≥0 segments)
+     [...name]   → :name*    catch-all           (≥1 segment)
+     [[name]]    → :name?    optional
+     [name]      → :name     dynamic (also inside a segment: post-[id] → post-:id)
 4. If result is ''   → '/'
-5. If result doesn't start with '/'  → prepend '/'
+5. Prepend '/'
 ```
+
+A catch-all must be the LAST segment — `[...slug]/edit.ts` throws at startup. Catch-all
+routes mount on a compiled RegExp (`RouteEntry.pattern`); a mapper restores named params,
+and catch-all values arrive as `string[]` (URI-decoded; `[]` when an optional one is empty).
 
 ### Examples derived from the exact regex
 
@@ -27,22 +35,19 @@ scan.ts: filePathToUrlPath(relativePath)
 | `/index.ts` | `/` |
 | `/auth/login.ts` | `/auth/login` |
 | `/a/[b]/[c].ts` | `/a/:b/:c` |
+| `/users/[[id]].ts` | `/users/:id?` (matches `/users` and `/users/7`) |
+| `/docs/[...slug].ts` | `/docs/:slug*` (`/docs/a/b` → `slug: ['a','b']`; not `/docs`) |
+| `/docs/[[...slug]].ts` | `/docs/:slug*?` (also `/docs` → `slug: []`) |
 
 **Edge case:** `/users/index.ts` → strips extension → `/users/index` → strips `/index` → `/users`. NOT `/users/`. There is no trailing slash.
 
 ---
 
-## Sorting: static before dynamic
+## Sorting: per-segment specificity
 
-```ts
-entries.sort((a, b) => {
-  const aDynamic = a.urlPath.includes(':') ? 1 : 0;
-  const bDynamic = b.urlPath.includes(':') ? 1 : 0;
-  return aDynamic - bDynamic || a.urlPath.localeCompare(b.urlPath);
-});
-```
-
-Static routes register on Express before dynamic routes **at all levels** — not just the same segment. `/users/me` will always beat `/users/:id` for a request to `/users/me`.
+Each segment gets a rank — static 0, `[id]` 1, `[[id]]` 2, `[...slug]` 3, `[[...slug]]` 4 — and
+routes are compared rank-by-rank from the first segment; ties sort alphabetically by URL.
+So `/users/me` beats `/users/:id`, which beats `/users/:id?`, then `/users/:rest*`.
 
 ---
 
@@ -55,9 +60,11 @@ GET  POST  PUT  PATCH  DELETE  HEAD  OPTIONS
 
 For each route module:
 1. Import the module dynamically.
-2. Read `mod.middlewares` (must be an array, else ignored).
+2. Read `mod.middlewares` (must be an array, else ignored), `mod.schema`, `mod.meta`.
 3. For each of the 7 method names, check `typeof mod[METHOD] === 'function'`.
-4. Register matching methods: `app[method.toLowerCase()](urlPath, ...middlewares, asyncWrap(handler))`.
+4. Register: `app[method](pattern ?? urlPath, ...paramMapper?, ...middlewares, validate?, asyncWrap(handler))`.
+   `validate` exists when `schema` has an entry for that method (method key wins over file-wide
+   `{ params, query, body }`). It runs AFTER middlewares; failure → 400 with `issues`.
 5. If **any** methods are implemented and **any** are unimplemented: register `app.all(urlPath, ...)` that returns 405 with `Allow: <implemented>` for the missing methods.
 
 **asyncWrap**: `Promise.resolve(handler(req, res, next)).catch(next)` — all route errors auto-forwarded.
@@ -92,7 +99,7 @@ Files that do NOT match this pattern are silently ignored by `scanDir`.
 - Does NOT follow symlinks (uses `fs.readdirSync` with `withFileTypes`).
 - Does NOT skip files named `index.ts` specially during scan — they are treated as routes whose URL resolves to the parent directory path.
 - Does NOT support nested `index` files as catch-alls — only the exact directory name maps to the URL.
-- Does NOT support wildcard/catch-all routes (`[...params]`) — that feature is planned for Phase 2.
+- Does NOT allow a catch-all anywhere but the last segment.
 
 ---
 

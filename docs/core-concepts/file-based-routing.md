@@ -13,8 +13,15 @@ EFC turns your directory tree into your route tree. The scanner walks `src/api/`
 | Nested directory | `api/posts/recent.ts` | `/posts/recent` |
 | Dynamic segment | `api/users/[id].ts` | `/users/:id` |
 | Dynamic directory | `api/posts/[slug]/comments.ts` | `/posts/:slug/comments` |
+| Optional segment | `api/users/[[id]].ts` | `/users` **and** `/users/:id` |
+| Catch-all | `api/docs/[...slug].ts` | `/docs/a`, `/docs/a/b/c`, … (not `/docs`) |
+| Optional catch-all | `api/docs/[[...slug]].ts` | `/docs`, `/docs/a`, `/docs/a/b/c`, … |
 
 **`[bracket]` → `:param`** — any path segment wrapped in square brackets becomes an Express route parameter accessible as `req.params.<name>`.
+
+**`[[double]]` → optional** — `req.params.id` is `undefined` when the segment is absent.
+
+**`[...spread]` → catch-all** — matches one or more remaining segments; `req.params.slug` is a **string array** (`/docs/a/b` → `['a', 'b']`, each segment URI-decoded). With double brackets it also matches zero segments (`[]`). A catch-all must be the last segment of the path — `[...slug]/edit.ts` is rejected at startup.
 
 **`index.ts` → parent path** — a file named `index.ts` (or `.js`) inside a directory maps to the directory's URL without a trailing `/index`.
 
@@ -28,14 +35,15 @@ The scanner recognises `.ts`, `.js`, `.mts`, `.mjs`, `.cts`, and `.cjs`.
 
 ## Route priority
 
-Static routes are registered before dynamic routes at each segment level. Given:
+Routes register most-specific first, compared segment by segment: at each position a **static** segment beats `[id]`, which beats `[[id]]`, then `[...slug]`, then `[[...slug]]`. Given:
 
 ```
-api/users/me.ts        →  /users/me        (static)
-api/users/[id].ts      →  /users/:id       (dynamic)
+api/docs/intro.ts        →  /docs/intro      (static)
+api/docs/[id].ts         →  /docs/:id        (dynamic)
+api/docs/[[...slug]].ts  →  /docs/:slug*?    (optional catch-all)
 ```
 
-A request to `/users/me` matches the static route first and never falls through to `/users/:id`.
+`/docs/intro` hits the static route, `/docs/42` the dynamic one, and `/docs` or `/docs/a/b` fall through to the catch-all. Ties are ordered alphabetically. `efc routes` prints the resolved order.
 
 ---
 
@@ -152,6 +160,39 @@ The dashboard renders `response.body` values as their **type names** (`String`, 
 
 ---
 
+## Request validation (`schema` export)
+
+Export `schema` to validate `params`, `query` and `body` before your handler runs. Any [Standard Schema](https://standardschema.dev) validator works — zod (3.24+), valibot, arktype — or anything with a zod-style `safeParse`. EFC never imports a validation library itself.
+
+```ts
+// src/api/users/index.ts
+import { z } from 'zod';
+
+export const schema = {
+  POST: { body: z.object({ email: z.string().email(), age: z.coerce.number().min(18) }) },
+  GET: { query: z.object({ page: z.coerce.number().default(1) }) },
+};
+
+export const POST = async (req, res) => {
+  // req.body is the parsed output: coerced types, defaults applied
+  res.status(201).json(req.body);
+};
+```
+
+Key it by method as above, or pass `{ params, query, body }` directly to apply it to every method in the file. Validation runs **after** the file's `middlewares` (so `requireAuth` still answers 401 first). Failures return:
+
+```json
+{
+  "error": "Validation failed",
+  "statusCode": 400,
+  "issues": [{ "location": "body", "path": "email", "message": "Invalid email address" }]
+}
+```
+
+See the [Validation guide](../guides/validation.md).
+
+---
+
 ## Route-level middleware
 
 Export a `middlewares` array from a route file. The middlewares apply to every handler in that file and run after global middleware.
@@ -178,17 +219,17 @@ export const GET = async (req, res) => {
 2. For each file, converts the path relative to `src/api/` to a URL:
    - Strips the extension.
    - Replaces `/index` with `''` (parent path).
-   - Replaces `[param]` with `:param`.
+   - Replaces `[param]` with `:param`, `[[param]]` with `:param?`, `[...param]` with `:param*` and `[[...param]]` with `:param*?`.
    - Prepends `/` if missing.
-3. Sorts results so static routes precede dynamic routes.
-4. Returns a `RouteEntry[]` array with `urlPath`, `filePath`, and `params`.
+3. Sorts results by per-segment specificity (see Route priority).
+4. Returns a `RouteEntry[]` array with `urlPath`, `filePath`, `params`, and — for catch-all routes, which Express 4's string paths can't express — a compiled `pattern` RegExp.
 
 `mountRoutes(app, routes)` in `packages/core/src/router/mount.ts`:
 
 1. Iterates `RouteEntry[]`.
 2. Dynamically `import()`s each route module.
-3. Reads the optional `middlewares` export.
-4. For each known HTTP method that is exported as a function, registers it with `app.<method>(urlPath, ...middlewares, asyncWrap(handler))`.
+3. Reads the optional `middlewares`, `schema` and `meta` exports.
+4. For each known HTTP method that is exported as a function, registers it with `app.<method>(urlPath, ...middlewares, validate?, asyncWrap(handler))`. Catch-all routes mount on their `pattern` behind a small mapper that turns positional captures back into named params.
 5. Registers an `app.all()` catch for unimplemented methods that returns 405.
 
 `asyncWrap` wraps every handler in `Promise.resolve(...).catch(next)` so that thrown errors and rejected promises are forwarded to the Express error handler automatically.

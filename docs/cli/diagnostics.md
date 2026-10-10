@@ -56,6 +56,35 @@ Each name corresponds to a file basename without extension. That is the string t
 
 **Lookup order for the tasks directory:** `src/tasks/` → `tasks/` → `dist/tasks/` (first that exists). This is a fixed convention — there is no `tasksDir` config option.
 
+### Dead-letter queue: `efc tasks failed | retry | purge`
+
+Jobs that exhausted their retries stay in the backend's failed set. These commands connect to it directly, so they work against a running app from any shell:
+
+```bash
+efc tasks failed                      # failed jobs + queue counts
+efc tasks failed --name SendEmail -n 50
+efc tasks failed --json               # machine-readable
+efc tasks retry 1842 1843             # re-queue (one more attempt each)
+efc tasks retry --all
+efc tasks purge 1842                  # delete
+efc tasks purge --all
+```
+
+```
+  Queue waiting=0  active=1  delayed=2  completed=318  failed=1
+
+  ✗ SendEmail #1842  attempts=4  2026-10-10T12:00:01.000Z
+    SMTP connection refused
+    data: {"to":"ada@example.com","subject":"Welcome"}
+```
+
+| Option | Meaning |
+|---|---|
+| `--backend <bullmq\|pg-boss>` | Default: BullMQ if `REDIS_URL` is set, else pg-boss for a `postgres` `DATABASE_URL` |
+| `--queue <name>` | `tasks.queue` from `ignite()` (default `efc`) |
+| `--redis-url <url>` | BullMQ connection (default `REDIS_URL`, from the environment or `.env`) |
+| `--database-url <url>` | pg-boss connection (default `DATABASE_URL`) |
+
 ---
 
 ## `efc doctor`

@@ -44,8 +44,12 @@ interface EFCConfig {
   // HTTP
   port?: number;
   cors?: boolean | CorsConfig;
+  requestTimeout?: number;
   globalMiddlewares?: RequestHandler[];
   onError?: ErrorRequestHandler;
+
+  // Logging
+  logging?: LoggingConfig | false;
 
   // Developer tools
   dashboard?: boolean;
@@ -130,9 +134,7 @@ onWorkerCrash: (id, code) => alerting.send(`Worker ${id} crashed with code ${cod
 
 ### `database`
 
-Database engine to connect. When omitted, EFC attempts to detect the engine from the `DATABASE_URL` format (`mongodb://...` → `'mongodb'`, `postgres://...` → `'postgresql'`).
-
-> **`'postgresql'` is accepted by the type but not yet implemented in the runtime** (landing in Phase 2). Only `'mongodb'` (via Mongoose) works today.
+Database engine to connect. When omitted, EFC detects it from the `databaseUrl` scheme (`mongodb://…` / `mongodb+srv://…` → `'mongodb'`, `postgres://…` / `postgresql://…` → `'postgresql'`). The engine also decides what [`defineModel`](./db.md) compiles to: a mongoose model or a Drizzle table. MongoDB needs `mongoose` installed; PostgreSQL needs `pg` and `drizzle-orm`.
 
 ---
 
@@ -180,13 +182,30 @@ Background task runtime configuration. Set to `false` (or omit) to disable the t
 ```ts
 interface TaskConfig {
   backend: 'bullmq' | 'pg-boss';
-  redisUrl?: string;       // BullMQ only — defaults to redis://localhost:6379
-  concurrency?: number;    // Jobs processed in parallel per worker — default 5
-  enqueueTimeout?: number; // Max ms enqueue() waits for Redis before rejecting — default 5000
+  redisUrl?: string;         // BullMQ — default redis://localhost:6379
+  connectionString?: string; // pg-boss — default: databaseUrl
+  schema?: string;           // pg-boss — Postgres schema for its tables, default 'pgboss'
+  concurrency?: number;      // jobs processed in parallel per worker — default 5
+  enqueueTimeout?: number;   // max ms enqueue() waits for the backend before rejecting — default 5000
+  queue?: string;            // queue name; apps sharing a Redis DB / Postgres need distinct ones — default 'efc'
 }
 ```
 
-> **`'pg-boss'` is accepted by the type but not yet implemented in the runtime** (landing in Phase 2). Only `'bullmq'` works today.
+See [Background Tasks](../core-concepts/background-tasks.md).
+
+---
+
+### `logging`
+
+```ts
+interface LoggingConfig {
+  level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent'; // default 'info'
+  pretty?: boolean;   // default: true in a non-production TTY, JSON otherwise
+  requests?: boolean; // one line per completed request — default true
+}
+```
+
+`false` silences framework logs. Every request still gets an `X-Request-Id`. See [Logging](../guides/logging.md).
 
 ---
 
@@ -218,6 +237,12 @@ interface CorsConfig {
   maxAge?: number;
 }
 ```
+
+---
+
+### `requestTimeout`
+
+Milliseconds a request may take before EFC answers **408** `{ "error": "Request Timeout", "statusCode": 408 }`. A handler that keeps running and replies later is ignored (logged at `warn`) instead of crashing. Default: no timeout.
 
 ---
 
@@ -267,3 +292,5 @@ ignite({ port: 3000 })
 |---|---|---|---|
 | `server` | `http.Server \| undefined` | — | Server to close (undefined for the master process) |
 | `timeoutMs` | `number` | `10_000` | Force-exit after this many milliseconds if `server.close()` hasn't finished |
+
+On a worker, the signal closes the HTTP server (in-flight requests finish), drains running task jobs, then exits. On the cluster primary it relays `SIGTERM` to every worker — so `docker stop` / Kubernetes, which signal only PID 1, still shut down gracefully — and force-exits after `timeoutMs + 2s` if a worker hangs. Repeated signals are ignored rather than killing a worker mid-drain.

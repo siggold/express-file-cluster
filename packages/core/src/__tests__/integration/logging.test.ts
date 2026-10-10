@@ -27,7 +27,6 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
-
 describe('integration — logging and request IDs', () => {
   let projectRoot: string;
   let apiDir: string;

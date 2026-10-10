@@ -1,353 +1,300 @@
 # Database — API Reference
 
-EFC provides two levels of database access, both from `express-file-cluster`:
-
 ```ts
-import { defineModel, db } from 'express-file-cluster';
+import { defineModel, transaction, db, ModelValidationError } from 'express-file-cluster';
 ```
+
+`defineModel` gives one model API on **MongoDB** (mongoose) and **PostgreSQL** (Drizzle). The model compiles for whichever engine Pre-Flight connected — `database` in `ignite()`, or the `DATABASE_URL` scheme — the first time it is used, so models can be defined at import time. One conformance test suite runs every feature below against both engines.
 
 ---
 
 ## `defineModel(name, schema, options?)`
 
-Creates an engine-agnostic model with a unified CRUD surface. Designed to work against MongoDB (via `mongoose`, implemented today) or PostgreSQL (via Drizzle, planned — see below).
-
 ```ts
-function defineModel<T extends Record<string, any>>(
-  name: string,
-  schema: ModelSchema,
-  options?: ModelOptions,
-): ModelCRUD<T>
+function defineModel<T extends object>(name: string, schema: ModelSchema, options?: ModelOptions): ModelCRUD<T>
 ```
 
-| Parameter | Type | Description |
-|---|---|---|
-| `name` | `string` | Model name (used as the Mongoose model name / SQL table name) |
-| `schema` | `ModelSchema` | Field definitions — see below |
-| `options` | `ModelOptions` | Model-level options — see [Model options](#modeloptions) below |
-
-### `ModelSchema`
+| Parameter | Description |
+|---|---|
+| `name` | Model name. Also the `ref` target for references. The collection/table defaults to its lowercase plural (`User` → `users`, `Category` → `categories`). |
+| `schema` | Field definitions (below). |
+| `options` | Timestamps, indexes, collection/table name. |
 
 ```ts
-type PrimitiveFieldType = 'string' | 'number' | 'boolean' | 'date' | 'object' | 'objectId';
-
-interface FieldDefinition {
-  type: PrimitiveFieldType | 'array';
-  required?: boolean;
-  unique?: boolean;
-  default?: unknown;
-  enum?: readonly (string | number)[];  // valid on 'string'/'number' types
-  ref?: string;                         // Mongoose model name; valid on 'objectId' types
-  of?: PrimitiveFieldType;              // item type for 'array' fields
-  sequence?: boolean | string;          // auto-increment — see "Sequence fields" below
-}
-
-// A field is either a FieldDefinition, or a one-element tuple holding a nested ModelSchema —
-// the latter defines an array of embedded sub-documents (see "Nested array schemas" below).
-type ModelSchema = Record<string, FieldDefinition | [ModelSchema]>;
-```
-
-### Example
-
-```ts
-// src/model/User.ts
 import { defineModel } from 'express-file-cluster';
 
-interface User {
-  name: string;
-  email: string;
-  role: string;
+interface Order {
+  number: number;
+  status: 'pending' | 'paid' | 'shipped';
+  customer: string;
+  items: { sku: string; qty: number }[];
+  shipping: { city: string; zip?: string };
+  tags: string[];
 }
 
-export const User = defineModel<User>('User', {
-  name:  { type: 'string', required: true },
-  email: { type: 'string', required: true, unique: true },
-  role:  { type: 'string', enum: ['member', 'admin'], default: 'member' },
-});
+export const Order = defineModel<Order>(
+  'Order',
+  {
+    number:   { type: 'number', sequence: true },
+    status:   { type: 'string', enum: ['pending', 'paid', 'shipped'], default: 'pending', index: true },
+    customer: { type: 'objectId', ref: 'Customer', required: true },
+    items:    [{ sku: { type: 'string', required: true }, qty: { type: 'number', min: 1 } }],
+    shipping: { city: { type: 'string', required: true }, zip: { type: 'string', match: /^\d{5}$/ } },
+    tags:     { type: 'array', of: 'string', default: [] },
+  },
+  { indexes: [{ fields: { customer: 1, createdAt: -1 } }] },
+);
 ```
 
-### Default value operator codes
+---
 
-Besides literal values, `default` accepts sentinel strings that are resolved to a generator function at schema-compile time — each document gets a freshly-computed value, not one baked in at schema-definition time:
+## Schema fields
 
-| Code | Resolves to | Pair with |
+A field is one of:
+
+| Form | Example | Meaning |
 |---|---|---|
-| `'$now'` | `new Date()`, evaluated per document | `type: 'date'` |
-| `'$uuid'` | `crypto.randomUUID()`, evaluated per document | `type: 'string'` |
-| `'$objectId'` | a fresh Mongoose `ObjectId`, evaluated per document | `type: 'objectId'` |
-| `'$timestamp'` | current epoch milliseconds (`Date.now()`, a `number`), evaluated per document | `type: 'number'` |
-| `'$shortId'` | a random 16-character base64url string, evaluated per document | `type: 'string'` |
-| `'$currentUser'` | the JWT payload [`requireAuth`](./auth.md) attached to the in-flight request (via [`getCurrentUser()`](./auth.md#getcurrentuser)) | `type: 'object'` |
-| `'$currentUser.<key>'` | a single field plucked from that payload, e.g. `'$currentUser.id'` | matches that field's shape |
+| `FieldDefinition` | `{ type: 'string', required: true }` | A typed field |
+| Nested schema (shorthand) | `shipping: { city: { type: 'string' } }` | Embedded object with typed, validated fields |
+| `{ type: 'object', fields }` | `{ type: 'object', required: true, fields: { … } }` | Embedded object that can itself be `required` |
+| `[schema]` | `items: [{ sku: { type: 'string' } }]` | Array of embedded documents |
+| `{ type: 'array', of }` | `{ type: 'array', of: 'string' }` / `of: { … }` | Typed array of primitives or embedded documents |
+
+Inner `required` fields of an embedded object only apply when the object is present.
+
+### `FieldDefinition`
+
+| Option | Applies to | Description |
+|---|---|---|
+| `type` | all | `'string' \| 'number' \| 'boolean' \| 'date' \| 'objectId' \| 'object' \| 'array'` |
+| `required` | all | Rejects missing (and explicitly `null`) values |
+| `unique` | all | Unique index; duplicates throw `HttpError(409)` |
+| `index` | all | Single-field index |
+| `default` | all | Literal, function, or an operator code (below) |
+| `enum` | string, number | Allowed values |
+| `min` / `max` | number, date | Inclusive bounds |
+| `minLength` / `maxLength` | string | Inclusive length bounds |
+| `match` | string | `RegExp` the value must match |
+| `validate` | all | `(value) => true \| false \| 'message'` — may be async |
+| `ref` | objectId, objectId arrays | Model name, enables `populate` |
+| `of` | array | Item type: a primitive name or a nested schema |
+| `fields` | object | Typed fields of an embedded object |
+| `sequence` | number | Auto-increment (below) |
+
+`type: 'object'` without `fields` (and `array` without `of`) store any JSON value unvalidated.
+
+**Types per engine.** `objectId` is a mongoose `ObjectId` on MongoDB and a `uuid` on PostgreSQL (ids are UUIDs there). On PostgreSQL, embedded objects and arrays are `jsonb` columns, `date` is `timestamptz`, `number` is `double precision` (`bigint` for sequences).
+
+### Default operator codes
+
+| Code | Resolves to (per record) | Pair with |
+|---|---|---|
+| `'$now'` | `new Date()` | `date` |
+| `'$uuid'` | `crypto.randomUUID()` | `string` |
+| `'$objectId'` | a fresh id (ObjectId / UUID) | `objectId` |
+| `'$timestamp'` | `Date.now()` | `number` |
+| `'$shortId'` | 16-char base64url string | `string` |
+| `'$currentUser'` | the request's JWT payload (`getCurrentUser()`) | `object` |
+| `'$currentUser.<key>'` | one field of it, e.g. `'$currentUser.id'` | that field's type |
+
+`$currentUser` codes resolve to `undefined` outside a request or without `requireAuth` — they never throw. Any other value is used literally.
+
+### Sequence fields
 
 ```ts
-export const Session = defineModel<Session>('Session', {
-  token:     { type: 'string', default: '$uuid' },
-  apiKey:    { type: 'string', default: '$shortId' },
-  ownerId:   { type: 'objectId', default: '$objectId' },
-  createdAt: { type: 'date',   default: '$now' },
-  createdAtMs: { type: 'number', default: '$timestamp' },
-});
-
-export const Post = defineModel<Post>('Post', {
-  title:     { type: 'string', required: true },
-  createdBy: { type: 'string', default: '$currentUser.id' }, // e.g. the JWT's `id` claim
-});
+orderNumber: { type: 'number', sequence: true, required: true }
 ```
 
-`'$currentUser'` and `'$currentUser.<key>'` resolve to `undefined` outside a request, or on a route that never ran through `requireAuth` — they don't throw. The value is read live from the same `AsyncLocalStorage` context `getCurrentUser()` uses, so it reflects whatever payload the request's `requireAuth` middleware verified, not a snapshot taken at schema-definition time.
+`sequence: true` keys the counter `'<Model>.<field>'`; a string shares one counter across fields/models. Values are assigned on insert, before `required` runs, and only when not supplied. MongoDB keeps counters in `efc_counters` (atomic `$inc` + upsert); PostgreSQL uses a real `SEQUENCE` (`efc_seq_<key>`). Top-level fields only.
 
-Any other string (or value) passed to `default` is used as-is, unchanged — only these exact strings/prefixes are special-cased.
+---
 
-### Sequence fields (auto-increment)
-
-`'$increment'` is **not** a `default` code — `default` is resolved synchronously by mongoose, but an auto-increment needs an async read-modify-write against a counters collection. Instead, use the `sequence` field option:
-
-```ts
-interface FieldDefinition {
-  // ...
-  sequence?: boolean | string;
-}
-```
-
-```ts
-export const Order = defineModel<Order>('Order', {
-  orderNumber: { type: 'number', sequence: true, required: true },
-});
-```
-
-- `sequence: true` uses `'<ModelName>.<field>'` as the counter key.
-- `sequence: 'some-key'` uses an explicit key, letting multiple fields (even across different models) share one counter — useful for a single global document number.
-- The value is assigned in a `pre('validate')` hook (before `required` is checked, so `sequence` fields can also be `required: true`), only on new documents, and only when the field wasn't already set explicitly (so passing your own value on `create()` still wins).
-- The counter itself lives in an internal `efc_counters` collection and is incremented atomically (`$inc` + upsert), so it's safe under concurrent inserts across workers/processes.
-- Only supported on top-level fields — not inside nested array sub-schemas.
-
-### `ModelOptions`
+## `ModelOptions`
 
 ```ts
 interface ModelOptions {
-  timestamps?: boolean | { createdAt?: string | false; updatedAt?: string | false };
+  timestamps?: boolean | { createdAt?: string | false; updatedAt?: string | false }; // default true
+  indexes?: IndexDefinition[];
+  collection?: string; // collection (MongoDB) or table (PostgreSQL) name
+}
+
+interface IndexDefinition {
+  fields: Record<string, 1 | -1 | 'text'>;
+  unique?: boolean;
+  expireAfterSeconds?: number; // MongoDB TTL index only
+  name?: string;
 }
 ```
 
-Passed straight through to mongoose's own `timestamps` schema option. Default is `true` (adds `createdAt`/`updatedAt`), matching EFC's previous hardcoded behavior — pass `false` to disable both, or an object to rename/selectively disable one:
-
-```ts
-export const Log = defineModel<Log>(
-  'Log',
-  { message: { type: 'string', required: true } },
-  { timestamps: false },
-);
-
-export const Event = defineModel<Event>(
-  'Event',
-  { name: { type: 'string', required: true } },
-  { timestamps: { createdAt: 'created_at', updatedAt: false } },
-);
-```
-
-### `objectId` references
-
-```ts
-export const Trip = defineModel<Trip>('Trip', {
-  visiting_place_id: { type: 'objectId', ref: 'VisitingPlace', required: true },
-  tags:              { type: 'array', of: 'string' },
-  waypoint_ids:      { type: 'array', of: 'objectId', ref: 'Waypoint' },
-});
-```
-
-`type: 'objectId'` validates the field is cast to a Mongo `ObjectId` (invalid strings raise a cast error before saving) and `ref` records which model it points to, enabling `.populate()` via the `populate` query option (see below).
-
-### Nested array schemas
-
-An array of embedded sub-documents is written as a one-element array literal in place of a `FieldDefinition`:
-
-```ts
-export const Trip = defineModel<Trip>('Trip', {
-  route_progress: [
-    {
-      route_id:    { type: 'string', required: true },
-      route_index: { type: 'number', required: true },
-      visited:     { type: 'boolean', required: true },
-    },
-  ],
-});
-```
+Indexes (including `unique`/`index` field options) are created by [`Model.sync()`](#syncmigrations). Text indexes use MongoDB text search or a PostgreSQL GIN `to_tsvector('simple', …)` index; TTL indexes are MongoDB-only and `sync()` rejects them on PostgreSQL.
 
 ---
 
-## `ModelCRUD<T>` — returned interface
+## `ModelCRUD<T>`
 
-Every model exposes these async methods:
+Every record has a string `id` (MongoDB records also keep `_id`). Unset fields are absent from records on both engines.
 
-### `find(filter?, options?)`
+### Reading
 
 ```ts
-interface ModelQueryOptions {
-  populate?: string | string[]; // Mongoose .populate() path(s) for objectId/ref fields
+find(filter?: Filter<T>, options?: FindOptions): Promise<ModelRecord<T>[]>
+findOne(filter: Filter<T>, options?: ModelQueryOptions): Promise<ModelRecord<T> | null>
+findById(id: string, options?: ModelQueryOptions): Promise<ModelRecord<T> | null>
+count(filter?: Filter<T>): Promise<number>
+```
+
+```ts
+interface FindOptions {
+  populate?: string | string[];               // resolve `ref` fields into records
+  select?: string[];                          // only these fields (id always included)
+  sort?: Record<string, 1 | -1 | 'asc' | 'desc'>;
+  limit?: number;
+  skip?: number;
 }
-
-find(filter?: Partial<T>, options?: ModelQueryOptions): Promise<(T & { id: string })[]>
 ```
-
-Returns all records matching the filter. Pass no arguments to return all records.
 
 ```ts
-const users = await User.find();
-const admins = await User.find({ role: 'admin' });
-const trips = await Trip.find({}, { populate: 'visiting_place_id' });
+const page = await Order.find(
+  { status: { $in: ['paid', 'shipped'] }, 'shipping.city': 'Oslo' },
+  { sort: { createdAt: -1 }, skip: 20, limit: 20, select: ['number', 'status'], populate: 'customer' },
+);
 ```
 
----
+`findById` with a malformed id returns `null`, like an unknown one.
 
-### `findById(id, options?)`
+### Filters
 
-```ts
-findById(id: string, options?: ModelQueryOptions): Promise<(T & { id: string }) | null>
-```
-
-Finds a single record by its primary key. Returns `null` if not found. The `id` string is cast to the engine's native PK type (`ObjectId` for MongoDB).
-
-```ts
-const user = await User.findById(req.params.id);
-if (!user) throw new HttpError(404, 'User not found');
-```
-
----
-
-### `findOne(filter, options?)`
-
-```ts
-findOne(filter: Partial<T>, options?: ModelQueryOptions): Promise<(T & { id: string }) | null>
-```
-
-Finds the first record matching the filter. Returns `null` if not found.
-
-```ts
-const user = await User.findOne({ email: 'alice@example.com' });
-```
-
----
-
-### `create(data)`
-
-```ts
-create(data: Partial<T>): Promise<T & { id: string }>
-```
-
-Creates a new record. Returns the created record with its generated `id`.
-
-```ts
-const user = await User.create({ name: 'Alice', email: 'alice@example.com' });
-res.status(201).json({ id: user.id });
-```
-
----
-
-### `update(id, data)`
-
-```ts
-update(id: string, data: Partial<T>): Promise<(T & { id: string }) | null>
-```
-
-Updates a record by id. Returns the updated record, or `null` if not found.
-
-```ts
-const user = await User.update(req.params.id, { role: 'admin' });
-```
-
----
-
-### `delete(id)`
-
-```ts
-delete(id: string): Promise<void>
-```
-
-Deletes a record by id. Does not throw if the record does not exist.
-
-```ts
-await User.delete(req.params.id);
-res.status(204).send();
-```
-
----
-
-### `count(filter?)`
-
-```ts
-count(filter?: Partial<T>): Promise<number>
-```
-
-Returns the number of records matching the filter.
-
-```ts
-const total = await User.count();
-const admins = await User.count({ role: 'admin' });
-```
-
----
-
-## Normalised `id` field
-
-Every record returned by `defineModel` methods has a string `id` field:
-
-- **MongoDB** — mapped from Mongoose's `_id` (`ObjectId.toString()`).
-- **PostgreSQL** — mapped from the SQL primary key.
-
-Route handler code never needs to branch on engine type to read the record's identifier.
-
----
-
-## `db` — raw client (escape hatch)
-
-`db` is a thread-local proxy that resolves to the native database client bootstrapped during Pre-Flight. Use it when `defineModel` doesn't cover an engine-specific feature.
-
-```ts
-import { db } from 'express-file-cluster';
-```
-
-The type of `db` at runtime:
-
-| `config.database` | `db` type |
+| Filter | Matches |
 |---|---|
-| `'mongodb'` | `mongoose.Connection` |
-| `'postgresql'` | `pg.Pool` _(planned)_ |
+| `{ status: 'paid' }` | equality (`null` matches missing/null) |
+| `{ tags: 'sale' }` | array field **contains** the value |
+| `{ total: { $gte: 10, $lt: 100 } }` | `$eq $ne $gt $gte $lt $lte` |
+| `{ status: { $in: [...] } }` | `$in`, `$nin` |
+| `{ coupon: { $exists: false } }` | field present / absent |
+| `{ title: { $regex: /^intro/i } }` | regular expression |
+| `{ 'shipping.city': 'Oslo' }` | dotted path into an embedded object |
+| `{ $or: [{…}, {…}] }`, `$and` | combinations |
+| `{ id: { $in: ids } }` | primary key |
 
-### MongoDB example
+This subset behaves identically on both engines and is typed (`Filter<T>`) — no casts needed. Other MongoDB operators pass through on MongoDB and are rejected with a `ModelValidationError` on PostgreSQL.
+
+### Writing
+
+```ts
+create(data: Partial<T>): Promise<ModelRecord<T>>
+createMany(data: Partial<T>[]): Promise<ModelRecord<T>[]>
+update(id: string, data: Update<T>): Promise<ModelRecord<T> | null>       // returns the updated record
+updateMany(filter: Filter<T>, data: Update<T>): Promise<number>          // records modified
+delete(id: string): Promise<void>
+deleteMany(filter: Filter<T>): Promise<number>                           // records deleted
+```
+
+`Update<T>` is plain fields (shorthand for `$set`) and/or operators:
+
+```ts
+await Order.update(id, { status: 'paid' });
+await Order.update(id, {
+  $set: { 'shipping.zip': '01234' },
+  $inc: { attempts: 1 },
+  $push: { tags: 'priority' },          // or { $each: ['a', 'b'] }
+  $pull: { tags: 'draft' },
+  $unset: { coupon: true },
+});
+```
+
+**Updates are validated**: changed fields must satisfy their type, `enum`, bounds, `match` and custom `validate`, and a `required` field can't be unset or nulled. `updatedAt` is refreshed.
+
+### Engine-specific
+
+```ts
+aggregate<R>(pipeline: object[]): Promise<R[]>   // MongoDB only — rejects on PostgreSQL
+raw(): Promise<unknown>                            // mongoose Model / Drizzle pgTable
+```
+
+`raw()` hands you the native object for anything the shared surface doesn't cover — e.g. Drizzle joins on PostgreSQL:
+
+```ts
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { eq } from 'drizzle-orm';
+import { getDbClient } from 'express-file-cluster';
+import type { Pool } from 'pg';
+
+const orm = drizzle(getDbClient() as unknown as Pool); // the real pool, not the `db` proxy
+const orders = (await Order.raw()) as any;
+const customers = (await Customer.raw()) as any;
+const rows = await orm.select().from(orders).innerJoin(customers, eq(orders.customer, customers.id));
+```
+
+### `sync()` / `drop()` {#syncmigrations}
+
+```ts
+sync(): Promise<void>   // create collection/table, add missing columns, build indexes — never drops or alters
+drop(): Promise<void>   // drop the collection/table and its data
+```
+
+Call them from [migrations](../guides/migrations.md).
+
+---
+
+## Errors
+
+| Situation | Thrown | HTTP (via the global handler) |
+|---|---|---|
+| Validation failure (create/update) | `ModelValidationError` | `400` with `issues: [{ path, message }]` |
+| Duplicate value of a `unique` field | `HttpError` | `409` — `"Order with this number already exists"` |
+| Unsupported operator / unknown field (PostgreSQL) | `ModelValidationError` | `400` |
+
+```ts
+import { ModelValidationError } from 'express-file-cluster';
+
+try {
+  await User.create(input);
+} catch (err) {
+  if (err instanceof ModelValidationError) console.log(err.issues); // [{ path: 'email', message: 'is required' }]
+  throw err;
+}
+```
+
+---
+
+## `transaction(fn)`
+
+```ts
+function transaction<T>(fn: () => Promise<T>): Promise<T>
+```
+
+Every model call inside `fn` — however deeply nested — joins the transaction automatically; a throw rolls everything back. Nested calls reuse the outer transaction.
+
+```ts
+import { transaction } from 'express-file-cluster';
+
+await transaction(async () => {
+  const order = await Order.create({ customer: customerId, items });
+  await Stock.updateMany({ sku: { $in: items.map((i) => i.sku) } }, { $inc: { count: -1 } });
+  return order;
+});
+```
+
+MongoDB transactions require a replica set (Atlas, or `mongod --replSet`).
+
+---
+
+## `db` — native client
+
+`db` forwards to the live client from Pre-Flight: a mongoose `Connection` on MongoDB, a node-postgres `Pool` on PostgreSQL.
 
 ```ts
 import { db } from 'express-file-cluster';
 
-export const GET = async (req, res) => {
-  // Aggregation pipeline — not available through defineModel
-  const results = await db.model('User').aggregate([
-    { $match: { role: 'admin' } },
-    { $group: { _id: '$role', count: { $sum: 1 } } },
-  ]);
-  res.json(results);
-};
+// MongoDB
+const stats = await db.model('User').aggregate([{ $group: { _id: '$role', n: { $sum: 1 } } }]);
+
+// PostgreSQL
+const { rows } = await db.query('SELECT role, count(*) FROM users GROUP BY role');
 ```
 
-### Safety
+It throws if accessed before Pre-Flight completes (e.g. at module load time) — use it inside handlers, tasks and migrations.
 
-`db` is a JavaScript `Proxy`. Accessing any property before Pre-Flight completes (i.e. before `ignite()` has run) throws:
+### `getDbClient()` / `setDbClient()`
 
-```
-Error: [EFC] db not ready — accessed before Pre-Flight completed
-```
-
-In practice, route handlers and task handlers always run after Pre-Flight, so this error only appears in test code that constructs handlers manually without calling `ignite()`.
-
----
-
-## `getDbClient()` / `setDbClient()`
-
-Low-level functions used internally by EFC. You generally don't need these unless you're writing a custom database adapter.
-
-```ts
-import { getDbClient, setDbClient } from 'express-file-cluster';
-
-setDbClient(myNativeConnection);    // called by EFC during Pre-Flight
-const client = getDbClient();       // returns the stored client, throws if not set
-```
+Read or replace the client behind `db` — mainly for tests that bypass `ignite()`.

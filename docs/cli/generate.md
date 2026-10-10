@@ -95,6 +95,22 @@ export function authorize(req: Request, res: Response, next: NextFunction): void
 
 ---
 
+## `efc generate migration <name>`
+
+Creates `src/migrations/<UTC timestamp>_<snake_name>.ts` (`.js` without a `tsconfig.json`) with `up` / `down` stubs. Run it with `efc db migrate`. See [Migrations & Seeds](../guides/migrations.md).
+
+```bash
+efc generate migration AddOrders   # → src/migrations/20261010120000_add_orders.ts
+```
+
+---
+
+## `efc generate seed <name>`
+
+Creates `src/seeds/<snake_name>.ts` exporting a default seed function. Run it with `efc db seed` or `efc db seed <snake_name>`.
+
+---
+
 ## Error: file already exists
 
 If the target file already exists, the generator prints an error and exits with code 1 — it never overwrites existing files:

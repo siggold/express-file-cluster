@@ -204,4 +204,26 @@ describe('ignite() — server integration', () => {
     expect(res.status).toBe(422);
     expect(res.body).toMatchObject({ error: 'Invalid input', statusCode: 422 });
   });
+
+  it('answers 408 when a handler exceeds requestTimeout, without crashing on its late reply', async () => {
+    writeRoute(
+      apiDir,
+      'slow.js',
+      `export const GET = async (_req, res) => { await new Promise((r) => setTimeout(r, 150)); res.json({ late: true }); };`,
+    );
+    writeRoute(apiDir, 'fast.js', `export const GET = (_req, res) => res.json({ ok: true });`);
+    server = await ignite({
+      basePath: '/',
+      cluster: false,
+      port: 0,
+      requestTimeout: 50,
+      logging: false,
+    });
+
+    const slow = await request(server!).get('/slow');
+    expect(slow.status).toBe(408);
+    expect(slow.body).toEqual({ error: 'Request Timeout', statusCode: 408 });
+    await new Promise((r) => setTimeout(r, 150)); // let the late res.json() run
+    expect((await request(server!).get('/fast')).body).toEqual({ ok: true });
+  });
 });

@@ -1,6 +1,6 @@
 # EFC — Implementation Checklist
 
-> Status as of 2026-10-10. **Phase 1 (Core MVP) complete** — all exit criteria met and covered by CI.
+> Status as of 2026-10-10. **Phase 1 (Core MVP) and Phase 2 (Beta) complete** — see each section; Phase 3 is next.
 
 ---
 
@@ -144,31 +144,45 @@ Verified with real repros against the built package (not just reading code) whil
 
 ---
 
-## Phase 2 — Beta (Q4 2026)
+## Phase 2 — Beta — ✅ complete 2026-10-10
 
-- [ ] PostgreSQL adapter (Drizzle ORM)
-- [ ] pg-boss task backend
-- [ ] Catch-all / wildcard routes (`[...params].ts`)
-- [ ] Request body validation (Zod integration)
-- [ ] Structured logging (`pino`) with request IDs
-- [ ] Scheduled/cron tasks
-- [ ] Optional dynamic segments (`[[id]].ts`)
-- [ ] `efc db migrate / rollback / seed / studio`
-- [ ] Dead-letter inspection in `efc tasks`
+Every item below is covered by tests that run in CI (MongoDB, MongoDB replica set, Redis and PostgreSQL services; e2e on Node 22 + 24).
 
-### `defineModel` gaps (found 2026-10-10)
+- [x] **PostgreSQL adapter (Drizzle ORM)** — `defineModel` compiles to a Drizzle `pgTable` when the engine is `postgresql`; uuid ids, jsonb for embedded data, real `SEQUENCE`s, non-destructive `sync()` DDL, populate across models, `db` = pg `Pool`. One conformance suite (`db/engines.integration.test.ts`) runs every model feature against both engines.
+- [x] **pg-boss task backend** — `tasks: { backend: 'pg-boss' }` on `databaseUrl`; one pg-boss queue per task, same retry semantics, cron, fail-fast enqueue, graceful drain (`integration/pgboss.test.ts`).
+- [x] **Catch-all / wildcard routes** — `[...slug]` (≥1, `string[]`) and `[[...slug]]` (≥0), RegExp-mounted with named-param mapping.
+- [x] **Request validation** — `export const schema` with any Standard Schema validator (zod ≥3.24, valibot, arktype) or zod-style `safeParse`; per method or file-wide; 400 with all issues; zod is not a dependency.
+- [x] **Structured logging (`pino`) with request IDs** — `X-Request-Id` in/out, `req.id`/`req.log`, request-scoped `getLogger()`, per-request lines, built-in dev renderer, `logging` config; all `console.*` in core runtime replaced.
+- [x] **Scheduled/cron tasks** — `schedule` + `timezone` on both backends; idempotent per-worker reconcile; stale schedules removed.
+- [x] **Optional dynamic segments** — `[[id]]`; routes ordered by per-segment specificity.
+- [x] **`efc db migrate / rollback / status / seed / studio`** — batches, Postgres advisory lock, tsx-or-dist runtime, `efc generate migration|seed`, read-only studio (`integration/db-cli.test.ts` drives the real binary).
+- [x] **Dead-letter inspection** — `efc tasks failed | retry | purge` for BullMQ and pg-boss.
 
-Today `defineModel` covers primitives, `required`/`unique`/`enum`/defaults, `ref` + `populate`, typed arrays, arrays of embedded sub-documents (nestable), `sequence`, and `timestamps`. Everything else needs raw mongoose.
+### `defineModel` gaps (found 2026-10-10) — all closed
 
-- [ ] **`update()` runs validators** — `findByIdAndUpdate` is called without `runValidators: true`, so updates can write an out-of-`enum` value or unset a `required` field. Bug, not a feature gap — do first.
-- [ ] **Typed embedded objects** — `address: { city: {...}, zip: {...} }` compiles to a real nested schema with validation. Today only arrays of sub-documents get one; `type: 'object'` is untyped `Mixed`.
-- [ ] **Query options on `find`** — `sort`, `limit`, `skip`, `select` (field projection) alongside the existing `populate`.
-- [ ] **Expose the underlying mongoose model** (e.g. `Model.raw()`), compiled eagerly or on demand — so mixing `defineModel` with raw mongoose doesn't depend on a CRUD call having registered the model first.
-- [ ] Typed query/update operators — accept `{ age: { $gt: 18 } }` / `{ $push: ... }` without a cast (runtime already passes them through).
-- [ ] Field validators — `min`, `max`, `minLength`, `maxLength`, `match`, custom `validate`.
-- [ ] Indexes beyond `unique` (compound, TTL, text) via `ModelOptions.indexes`.
-- [ ] Bulk + aggregation — `updateMany`, `deleteMany`, `aggregate`.
-- [ ] Transactions helper over mongoose sessions.
+- [x] `update()` / `updateMany()` run validators (Mongo `runValidators`; Postgres shared JS validator).
+- [x] Typed embedded objects — nested-schema shorthand or `{ type: 'object', fields }`; arrays of embedded docs via `of: {...}` too.
+- [x] `find` options — `sort`, `limit`, `skip`, `select` (plus `populate`).
+- [x] `Model.raw()` — compiles on demand; returns the mongoose model / Drizzle table.
+- [x] Typed `Filter<T>` / `Update<T>` — operators, dotted paths, `$and`/`$or` without casts.
+- [x] Field validators — `min`, `max`, `minLength`, `maxLength`, `match`, custom (async) `validate`.
+- [x] Indexes — `index`, compound, unique, text (both engines), TTL (MongoDB).
+- [x] Bulk + aggregation — `createMany`, `updateMany`, `deleteMany` (counts), `aggregate` (MongoDB).
+- [x] `transaction(fn)` — AsyncLocalStorage-joined; Mongo sessions / Drizzle tx.
+- [x] Also: `ModelValidationError` (400 + issues), duplicate key → 409, malformed id → not found, `Model.drop()`.
+
+### Found and fixed along the way
+
+- [x] **`requestTimeout` was a phantom option** — typed and documented ("408 on exceed") but never implemented. Implemented, with a guard so a handler's late reply can't crash the error handler.
+- [x] **`connectMongo()` returned `undefined` in native ESM** (read mongoose's CJS namespace binding) — `db` was undefined on MongoDB in built apps since before this phase.
+- [x] **Optional peers bundled into `dist`** — `pg`/`drizzle-orm`/`pg-boss` as devDependencies only got inlined by tsup and broke at runtime; now optional `peerDependencies`. Lesson recorded in CLAUDE.md.
+- [x] Driver loaders reported every import failure as "not installed"; now only genuinely missing modules.
+- [x] Scaffolder: PostgreSQL + pg-boss selectable again; ~550 lines of Drizzle stubs removed (generated code is engine-agnostic); init migration; `db:*` scripts; REDIS_URL only for BullMQ.
+
+### Not done — deliberately out of scope
+
+- Plan.md's "Redis adapter (cache + session store)" was never on this checklist; not started.
+- No schema-diff migration generator (`efc db generate`) — migrations are hand-written around `sync()`.
 
 ---
 
@@ -213,13 +227,11 @@ Found by actually running each exit criterion end to end, not by reading code:
 - [x] `create-efc-app` runs `npm install -g express-file-cluster` after scaffolding — kept as intended behavior (confirmed 2026-10-10).
 - [x] mongoose versions aligned (2026-10-10): peer `^8.0.0 || ^9.0.0` (was an open-ended `>=8.0.0` that admitted untested v10), scaffolder `^9.7.2` (was `^8.0.0`). DB smoke + live-Mongo integration suites verified green on both 8.24.5 and 9.7.2. Smoke tests moved off deprecated `validateSync()` to `validate()`.
 
-## What to Build Next — Phase 2 (Priority Order)
+## What to Build Next — Phase 3 (Priority Order)
 
-1. **`defineModel` — `update()` validators, typed embedded objects, `find` query options, raw model access** — the first is a correctness bug; the rest are the most-hit gaps vs. raw mongoose
-2. **Request validation (Zod)** — `export const schema = { body, query, params }` per route; no new infra, biggest DX win
-3. **Structured logging (`pino`) with request IDs** — replace `console.*` in core; correlate across workers
-4. **Catch-all + optional segments** (`[...params].ts`, `[[id]].ts`) — router-only change
-5. **Cron tasks** — wire the existing `schedule` option to BullMQ repeatable jobs (Redis already required)
-6. **Dead-letter inspection in `efc tasks`**
-7. **PostgreSQL (Drizzle) + pg-boss + `packages/adapters`** — largest item; re-enable the scaffolder choices when it lands
-8. `efc db migrate / rollback / seed / studio` — depends on 7
+1. **`efc/testing` — `createTestApp()`** — the integration tests here hand-roll tmp projects + `ignite()`; ship that as a supported helper
+2. **OpenAPI generation** — `schema` exports are Standard Schema validators; derive request schemas (+ `meta`) into an OpenAPI document
+3. **OpenTelemetry tracing** — request IDs and the request context are already in place
+4. **Plugin system** (`registerPlugin()`)
+5. **WebSockets** (`export const WS = ...`)
+6. Benchmarks vs bare Express / Fastify, security audit, semver/LTS policy, docs site

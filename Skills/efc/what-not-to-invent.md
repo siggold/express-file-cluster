@@ -40,7 +40,10 @@ useDatabase()
 connectDatabase()
 createTask()           // ← does NOT exist (it's defineTask)
 addTask()
-scheduleTask()         // ← does NOT exist yet (schedule option exists but no scheduler impl)
+scheduleTask()         // ← does NOT exist — use defineTask({ schedule: '<cron>' }, handler)
+validate() / useSchema() // ← does NOT exist — use `export const schema` in the route file
+createLogger()         // ← does NOT exist — use logger / getLogger() from the main path
+withTransaction()      // ← does NOT exist — it's transaction(fn) from the main path
 withAuth()             // ← does NOT exist
 protect()              // ← does NOT exist
 authenticate()         // ← does NOT exist (it's requireAuth)
@@ -65,6 +68,9 @@ ignite(config);   // you wire this yourself
 // ❌ No plugins system yet (Phase 3)
 ignite({ plugins: [...] })     // does NOT exist
 
+// ❌ No apiDir / tasksDir / migrationsDir options — all are conventions:
+//    src/api, src/tasks (non-recursive), src/migrations, src/seeds
+
 // ✅ Request context DOES exist now (added 2026-07-19) — every request run through
 // ignite() is wrapped in an AsyncLocalStorage context (packages/core/src/context.ts),
 // and requireAuth populates it with the verified JWT payload:
@@ -82,21 +88,20 @@ getCurrentUser()   // Record<string, unknown> | undefined — the auth payload, 
 ## Route file features that do NOT exist
 
 ```ts
-// ❌ Named exports other than HTTP methods and 'middlewares' are NOT special
+// ✅ Special exports: HTTP methods, `middlewares`, `schema` (validation), `meta` (dashboard docs).
+// ❌ Everything else is ignored:
 export const config = { ... }         // ignored
-export const schema = { ... }         // ignored
-export const meta = { ... }           // ignored
 export const description = '...'      // ignored
 
 // ❌ Default export is NOT used by the router
 export default async function(req, res) { ... }   // NOT called as a route handler
 
-// ❌ Wildcard/catch-all routes not implemented (Phase 2)
-// src/api/[...params].ts   → DOES NOT WORK YET
-// src/api/blog/[...slug].ts → DOES NOT WORK YET
+// ✅ Catch-all / optional segments DO exist: [...slug] (≥1 segment, req.params.slug is string[]),
+//    [[...slug]] (≥0), [[id]] (optional). A catch-all must be the LAST segment:
+// src/api/[...slug]/edit.ts  → rejected at startup
 
-// ❌ Optional dynamic segments not implemented (Phase 2)
-// src/api/users/[[id]].ts  → DOES NOT WORK YET
+// ❌ schema validators are not auto-detected from TypeScript types — export real validators
+// (zod/valibot/arktype or anything with safeParse). EFC does not depend on zod.
 ```
 
 ---
@@ -107,13 +112,11 @@ export default async function(req, res) { ... }   // NOT called as a route handl
 // ❌ Task sub-directories not scanned
 // src/tasks/email/SendEmail.ts   → NOT registered (only top-level files)
 
-// ❌ Cron/schedule not implemented (Phase 2)
-// defineTask({ schedule: '0 * * * *' }, handler) → option accepted but NOT executed
-
-// ❌ pg-boss backend not implemented (Phase 2)
-ignite({ tasks: { backend: 'pg-boss' } })  // will fail at runtime
-
-// ❌ No enqueue from within a task is blocked, but there's no built-in parent/child job tracking
+// ✅ Cron DOES exist: defineTask({ schedule: '0 * * * *', timezone: 'UTC' }, handler) — payload is {}
+// ✅ pg-boss DOES exist: ignite({ tasks: { backend: 'pg-boss' } }) — uses databaseUrl
+// ❌ No per-run payload for scheduled runs (always {}) and no "every N ms" interval option
+// ❌ No built-in parent/child job tracking or job progress API
+// ❌ No dead-letter web UI — use `efc tasks failed | retry | purge`
 ```
 
 ---
@@ -121,35 +124,37 @@ ignite({ tasks: { backend: 'pg-boss' } })  // will fail at runtime
 ## CLI commands that do NOT exist
 
 ```bash
-efc db migrate      # NOT IMPLEMENTED (Phase 2)
-efc db rollback     # NOT IMPLEMENTED
-efc db seed         # NOT IMPLEMENTED
-efc db studio       # NOT IMPLEMENTED
 efc lint            # NOT IMPLEMENTED
 efc deploy          # NOT IMPLEMENTED
+efc db generate     # NOT IMPLEMENTED — no schema-diff migration generator; write migrations
+                    # by hand (efc generate migration <name>) and call Model.sync()
+efc db reset / fresh # NOT IMPLEMENTED
 ```
 
-Implemented commands: `start dev`, `start prod`, `build prod`, `run tests`, `generate route/task/middleware`, `routes`, `tasks`, `doctor`, `--version` (read from the installed package.json).
+Implemented commands: `start dev|prod`, `build prod`, `run tests`, `generate route|task|middleware|migration|seed`, `db migrate|rollback|status|seed|studio`, `routes`, `tasks` (+ `failed|retry|purge`), `doctor`, `--version`.
 
 ---
 
 ## Database features that do NOT exist
 
 ```ts
-// ❌ PostgreSQL adapter not implemented (Phase 2)
-ignite({ database: 'postgresql', databaseUrl: process.env.DATABASE_URL })
-// → connects nothing; only 'mongodb' is implemented
+// ✅ PostgreSQL DOES exist (Drizzle) — same defineModel API. ids are UUIDs there.
+// ✅ transaction(fn) DOES exist (main path). MongoDB needs a replica set.
+// ✅ Migrations DO exist (efc db migrate) — but defineModel does NOT create PostgreSQL
+//    tables on its own: call Model.sync() from a migration. Using a model whose table
+//    doesn't exist fails with 'relation "<table>" does not exist'.
+// ❌ No automatic schema diffing / ALTER of existing columns — sync() only ADDS missing
+//    columns (nullable) and indexes; renames/type changes need hand-written db.query().
+// ❌ No joins in the model API — populate does a second query; for SQL joins use
+//    Drizzle via Model.raw() or db.query().
+// ❌ aggregate() is MongoDB-only (rejects on PostgreSQL).
+// ❌ TTL indexes (expireAfterSeconds) are MongoDB-only.
+// ❌ Filter operators beyond $eq $ne $gt $gte $lt $lte $in $nin $exists $regex $and $or
+//    are rejected on PostgreSQL (they pass through to mongoose on MongoDB).
+// ❌ Update operators beyond $set $unset $inc $push $pull likewise.
 
-// ❌ No transaction support in defineModel
-// No defineModel().transaction(...) or similar
-
-// ❌ No migration system
-// defineModel does NOT create tables or run schema migrations
-// (for MongoDB it creates collections lazily via Mongoose; for Postgres: unimplemented)
-
-// ❌ db.query() is NOT guaranteed to exist
-// db is typed as AnyClient = Record<string, unknown>
-// What methods are available depends entirely on what mongoose.Connection exposes
+// db is the native client: mongoose Connection on MongoDB, pg Pool on PostgreSQL.
+// db.query() exists only on PostgreSQL; db.model() only on MongoDB.
 
 // ❌ '$increment' is NOT a `default` operator code, and never will be —
 // mongoose resolves `default` synchronously, but an auto-increment needs an
@@ -159,7 +164,7 @@ ignite({ database: 'postgresql', databaseUrl: process.env.DATABASE_URL })
 // FieldDefinition.default supports:
 //   '$now' | '$uuid' | '$objectId' | '$timestamp' | '$shortId'
 //   | '$currentUser' | `$currentUser.${string}`
-// (see db/model.ts STATIC_DEFAULT_OPERATORS / resolveDefault)
+// (see db/schema.ts STATIC_DEFAULT_OPERATORS / resolveDefault)
 ```
 
 ---
@@ -204,6 +209,9 @@ CORS_ORIGINS      — NOT read by ignite(); pass config.cors.origin explicitly
                     (or: cors: { origin: process.env.CORS_ORIGINS?.split(',') } )
 REDIS_URL         — NOT read by ignite(); pass tasks.redisUrl explicitly
                     (or read it yourself: tasks: { redisUrl: process.env.REDIS_URL })
+
+(The standalone CLI commands — efc db, efc tasks failed, efc doctor — DO read
+DATABASE_URL / REDIS_URL from the environment or .env themselves.)
 ```
 
 `NODE_ENV` is the one env var the framework *does* still read directly (cluster-in-production default, dev-only dashboard toggle, auth cookie `Secure` flag) — see `pre-flight.md`.
@@ -214,7 +222,7 @@ REDIS_URL         — NOT read by ignite(); pass tasks.redisUrl explicitly
 
 ```ts
 // ❌ Calling enqueue without configuring tasks in ignite()
-ignite({ apiDir: '...' })   // no tasks config
+ignite({ port: 3000 })   // no tasks config
 await enqueue('SendEmail', payload)  // throws: Task queue not initialised
 
 // ❌ Calling requireAuth before ignite() / configureAuth()
@@ -224,7 +232,8 @@ await enqueue('SendEmail', payload)  // throws: Task queue not initialised
 // In module-level or import-time code:
 const conn = db.model('User')  // throws: db not ready
 
-// ❌ Passing a relative path to apiDir
-ignite({ apiDir: './src/api' })  // WRONG in production — use path.join(__dirname, 'api')
-// (works in dev with tsx because cwd is the project root, but breaks in dist/)
+// ❌ Passing apiDir at all — it is not an option; src/api is found by convention
+// (dev: src/api via tsx; prod: dist/src/api, emitted by `efc build prod`)
+
+// ❌ Forgetting `efc db migrate` on PostgreSQL before first boot — tables don't exist yet
 ```

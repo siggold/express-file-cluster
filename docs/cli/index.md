@@ -25,9 +25,16 @@ npm install --save-dev express-file-cluster
 | `efc generate route <path>` | Scaffold a route file |
 | `efc generate task <name>` | Scaffold a task file |
 | `efc generate middleware <name>` | Scaffold a middleware file |
+| `efc generate migration <name>` | Scaffold a timestamped migration |
+| `efc generate seed <name>` | Scaffold a seed script |
+| `efc db migrate \| rollback \| status` | Run, revert and inspect migrations |
+| `efc db seed [name]` | Run seed scripts |
+| `efc db studio` | Read-only database browser on 127.0.0.1 |
 | `efc routes` | Print the resolved route table |
 | `efc tasks` | List registered background tasks |
+| `efc tasks failed \| retry \| purge` | Inspect and act on dead-lettered jobs |
 | `efc doctor` | Validate config, env vars, and project setup |
+| `efc --version` | Print the installed version |
 
 ---
 
@@ -35,4 +42,5 @@ npm install --save-dev express-file-cluster
 
 - [start / build / run](./start.md) — Lifecycle commands
 - [generate](./generate.md) — Code generation
-- [diagnostics](./diagnostics.md) — `routes`, `tasks`, `doctor`
+- [db](./db.md) — migrations, seeds, studio
+- [diagnostics](./diagnostics.md) — `routes`, `tasks` (incl. dead letters), `doctor`
