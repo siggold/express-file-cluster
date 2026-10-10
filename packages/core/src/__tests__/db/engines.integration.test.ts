@@ -304,6 +304,17 @@ for (const engine of ['mongodb', 'postgresql'] as const) {
       expect(await Book.findOne({ isbn: '042-1042' })).toBeNull();
     });
 
+    it('drop() removes the collection/table and is safe to repeat', async () => {
+      const Temp = defineModel<{ x: string }>(`Temp${suffix}`, { x: { type: 'string' } });
+      await Temp.sync();
+      await Temp.create({ x: 'a' });
+      await Temp.drop();
+      await Temp.drop();
+      await Temp.sync();
+      expect(await Temp.count()).toBe(0);
+      await Temp.drop();
+    });
+
     it('exposes the native model/table via raw(), and aggregate() per engine', async () => {
       expect(await Book.raw()).toBeTruthy();
       if (engine === 'mongodb') {

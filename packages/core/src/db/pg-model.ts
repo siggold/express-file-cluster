@@ -590,5 +590,10 @@ export function pgModel<T extends object>(
       const { sql } = await compile();
       for (const stmt of statements) await client().execute(sql.raw(stmt));
     },
+
+    async drop() {
+      const { sql } = await compile();
+      await client().execute(sql.raw(`DROP TABLE IF EXISTS ${q(table)}`));
+    },
   };
 }

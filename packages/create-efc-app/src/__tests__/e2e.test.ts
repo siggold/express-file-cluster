@@ -14,6 +14,13 @@ import type { AdminFeatures, UserFeatures } from '../scaffold.js';
 // only runs with EFC_E2E=1 (the `e2e` CI job sets it).
 const RUN = process.env['EFC_E2E'] === '1';
 const MONGO_URL = process.env['EFC_TEST_MONGO_URL'] ?? 'mongodb://127.0.0.1:27017/efc_e2e';
+const PG_URL = process.env['EFC_TEST_PG_URL'] ?? 'postgres://postgres@127.0.0.1:5433/efc_e2e';
+
+// Both supported stacks, each scaffolded with the interactive defaults otherwise.
+const STACKS = [
+  { label: 'MongoDB + BullMQ', database: 'mongodb', taskBackend: 'bullmq', url: MONGO_URL },
+  { label: 'PostgreSQL + pg-boss', database: 'postgresql', taskBackend: 'pg-boss', url: PG_URL },
+] as const;
 const CORE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../core');
 
 const all = <T extends object>(flags: T): T =>
@@ -34,7 +41,7 @@ function run(cmd: string, args: string[], cwd: string): string {
   return execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
-describe.skipIf(!RUN)('create-efc-app — end to end', () => {
+describe.skipIf(!RUN).each(STACKS)('create-efc-app — end to end ($label)', (stack) => {
   let workDir: string;
   let appDir: string;
   let server: ChildProcess | undefined;
@@ -53,11 +60,11 @@ describe.skipIf(!RUN)('create-efc-app — end to end', () => {
     await scaffold({
       projectName: appDir,
       language: 'typescript',
-      database: 'mongodb',
+      database: stack.database,
       authStrategy: 'http-only',
       cluster: true,
       tasks: true,
-      taskBackend: 'bullmq',
+      taskBackend: stack.taskBackend,
       routeDocs: true,
       userPortal: true,
       adminPortal: true,
@@ -75,16 +82,35 @@ describe.skipIf(!RUN)('create-efc-app — end to end', () => {
     const envPath = path.join(appDir, '.env');
     const env = (await fs.readFile(envPath, 'utf8')).replace(
       /^DATABASE_URL=.*$/m,
-      `DATABASE_URL=${MONGO_URL}`,
+      `DATABASE_URL=${stack.url}`,
     );
     await fs.writeFile(envPath, env);
 
     run('npm', ['install', '--no-audit', '--no-fund'], appDir);
   }, 300_000);
 
+  it('creates the schema with efc db migrate', () => {
+    const out = run(path.join(appDir, 'node_modules', '.bin', 'efc'), ['db', 'migrate'], appDir);
+    expect(out).toMatch(/00000000000000_init[\s\S]*Ran 1 migration/);
+  }, 120_000);
+
   afterAll(async () => {
     if (server?.pid && server.exitCode === null) process.kill(-server.pid, 'SIGKILL');
-    if (workDir) await fs.remove(workDir);
+    // Leave the database clean for the next run: roll the init migration back.
+    if (
+      process.env['EFC_E2E_KEEP'] !== '1' &&
+      appDir &&
+      (await fs.pathExists(path.join(appDir, 'node_modules')))
+    ) {
+      try {
+        run(path.join(appDir, 'node_modules', '.bin', 'efc'), ['db', 'rollback'], appDir);
+      } catch {
+        /* best effort */
+      }
+    }
+    // EFC_E2E_KEEP=1 leaves the generated app on disk for debugging.
+    if (workDir && process.env['EFC_E2E_KEEP'] !== '1') await fs.remove(workDir);
+    else if (workDir) console.log(`kept: ${appDir}`);
   });
 
   it('builds for production with no type errors', () => {

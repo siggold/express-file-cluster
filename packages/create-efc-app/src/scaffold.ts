@@ -116,6 +116,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<void> {
   if (opts.userPortal && uf.apiAndBilling) await writeUserBillingRoutes(dest, opts);
   if (opts.userPortal && uf.support) await writeSupportRoutes(dest, opts);
   if (opts.adminPortal) await writeAdminExtendedRoutes(dest, opts);
+  await writeInitMigration(dest, opts);
 }
 
 async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<void> {
@@ -124,13 +125,13 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
   };
   if (opts.database === 'mongodb') deps['mongoose'] = '^9.7.2';
   if (opts.database === 'postgresql') {
-    deps['pg'] = '^8.0.0';
-    deps['drizzle-orm'] = '^0.33.0';
+    deps['pg'] = '^8.11.0';
+    deps['drizzle-orm'] = '^0.45.0';
   }
   if (opts.tasks && opts.taskBackend === 'bullmq') deps['bullmq'] = '^5.0.0';
-  if (opts.tasks && opts.taskBackend === 'pg-boss') deps['pg-boss'] = '^10.0.0';
+  if (opts.tasks && opts.taskBackend === 'pg-boss') deps['pg-boss'] = '^12.0.0';
   if (opts.mailer) deps['nodemailer'] = '^6.9.0';
-  if (opts.database === 'mongodb') deps['bcrypt'] = '^5.1.0';
+  deps['bcrypt'] = '^5.1.0';
 
   const devDeps: Record<string, string> = {
     vitest: '^5.0.3',
@@ -143,7 +144,8 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
     devDeps['@types/express'] = '^4.17.21';
     devDeps['tsx'] = '^4.0.0';
     if (opts.mailer) devDeps['@types/nodemailer'] = '^6.4.0';
-    if (opts.database === 'mongodb') devDeps['@types/bcrypt'] = '^5.0.0';
+    devDeps['@types/bcrypt'] = '^5.0.0';
+    if (opts.database === 'postgresql') devDeps['@types/pg'] = '^8.11.0';
   }
 
   const pkg = {
@@ -155,6 +157,10 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
       build: 'efc build prod',
       start: 'efc start prod',
       test: 'efc run tests',
+      'db:migrate': 'efc db migrate',
+      'db:rollback': 'efc db rollback',
+      'db:seed': 'efc db seed',
+      'db:studio': 'efc db studio',
     },
     dependencies: deps,
     devDependencies: devDeps,
@@ -187,9 +193,12 @@ async function writeTsConfig(dest: string, opts: ScaffoldOptions): Promise<void>
 
 async function writeEfcConfig(dest: string, opts: ScaffoldOptions): Promise<void> {
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
-  const tasks = opts.tasks
-    ? `{ backend: '${opts.taskBackend ?? 'bullmq'}', concurrency: 5, redisUrl: process.env.REDIS_URL }`
-    : 'false';
+  // pg-boss stores jobs in the app's own Postgres (databaseUrl); BullMQ needs Redis.
+  const tasks = !opts.tasks
+    ? 'false'
+    : opts.taskBackend === 'pg-boss'
+      ? `{ backend: 'pg-boss', concurrency: 5 }`
+      : `{ backend: 'bullmq', concurrency: 5, redisUrl: process.env.REDIS_URL }`;
 
   const content = `import type { EFCConfig } from 'express-file-cluster';
 
@@ -267,8 +276,10 @@ async function writeEnvFiles(dest: string, opts: ScaffoldOptions): Promise<void>
   const smtpExample = opts.mailer
     ? `\nAPP_URL=http://localhost:3000\nSMTP_HOST=${resolvedHost}\nSMTP_PORT=${resolvedPort}\nSMTP_USER=your@email.com\nSMTP_PASS=${isGmail ? 'your_16_char_app_password' : 'your_smtp_password'}${passComment}\nSMTP_FROM=noreply@yourapp.com\n`
     : '';
-  const dotenv = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbUrl}\nJWT_SECRET=${secret}\nREDIS_URL=redis://localhost:6379\nCORS_ORIGINS=http://localhost:3000${smtpVars}`;
-  const example = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbExampleUrl}\nJWT_SECRET=<generate with: openssl rand -hex 64>\nREDIS_URL=redis://localhost:6379\nCORS_ORIGINS=http://localhost:3000,https://yourapp.com${smtpExample}`;
+  // Only BullMQ needs Redis — and `efc tasks failed` picks its backend from REDIS_URL.
+  const redis = opts.tasks && opts.taskBackend !== 'pg-boss' ? '\nREDIS_URL=redis://localhost:6379' : '';
+  const dotenv = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbUrl}\nJWT_SECRET=${secret}${redis}\nCORS_ORIGINS=http://localhost:3000${smtpVars}`;
+  const example = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbExampleUrl}\nJWT_SECRET=<generate with: openssl rand -hex 64>${redis}\nCORS_ORIGINS=http://localhost:3000,https://yourapp.com${smtpExample}`;
   await fs.outputFile(path.join(dest, '.env'), dotenv);
   await fs.outputFile(path.join(dest, '.env.example'), example);
 }
@@ -381,8 +392,7 @@ async function writeUserModel(dest: string, opts: ScaffoldOptions): Promise<void
   const ts = opts.language === 'typescript';
 
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface UserDocument {
@@ -431,27 +441,6 @@ export const User = defineModel('User', {
   refreshToken:       { type: 'string' },
   refreshTokenExpiry: { type: 'date' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for User
-// import { pgTable, serial, text, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const users = pgTable('users', {
-//   id:         serial('id').primaryKey(),
-//   name:       text('name').notNull(),
-//   email:      text('email').notNull().unique(),
-//   password:   text('password').notNull(),
-//   role:       text('role').notNull().default('user'),
-//   avatar:     text('avatar'),
-//   isVerified: boolean('is_verified').notNull().default(false),
-//   isActive:   boolean('is_active').notNull().default(true),
-//   createdAt:  timestamp('created_at').defaultNow(),
-//   updatedAt:  timestamp('updated_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for User
-export {};
 `;
 
   await fs.outputFile(path.join(dest, 'src', 'model', `User.${ext}`), content);
@@ -462,8 +451,7 @@ async function writeAdminModel(dest: string, opts: ScaffoldOptions): Promise<voi
   const ts = opts.language === 'typescript';
 
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface AdminDocument {
@@ -506,26 +494,6 @@ export const Admin = defineModel('Admin', {
   refreshToken:       { type: 'string' },
   refreshTokenExpiry: { type: 'date' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Admin
-// import { pgTable, serial, text, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const admins = pgTable('admins', {
-//   id:          serial('id').primaryKey(),
-//   name:        text('name').notNull(),
-//   email:       text('email').notNull().unique(),
-//   password:    text('password').notNull(),
-//   role:        text('role').notNull().default('admin'),
-//   permissions: text('permissions').array().notNull().default([]),
-//   isActive:    boolean('is_active').notNull().default(true),
-//   createdAt:   timestamp('created_at').defaultNow(),
-//   updatedAt:   timestamp('updated_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Admin
-export {};
 `;
 
   await fs.outputFile(path.join(dest, 'src', 'model', `Admin.${ext}`), content);
@@ -545,9 +513,9 @@ async function writeAuthRoutes(dest: string, opts: ScaffoldOptions): Promise<voi
   // referencing both unconditionally broke builds when only one portal was selected.
   const hasUser = opts.userPortal;
   const hasAdmin = opts.adminPortal;
-  const mongo = opts.database === 'mongodb' && (hasUser || hasAdmin);
+  const hasModels = hasUser || hasAdmin;
 
-  const loginDbImports = mongo
+  const loginDbImports = hasModels
     ? `import bcrypt from 'bcrypt';\nimport crypto from 'node:crypto';\n${hasUser ? `import { User } from '../../model/User.js';\n` : ''}${hasAdmin ? `import { Admin } from '../../model/Admin.js';\n` : ''}`
     : '';
 
@@ -589,7 +557,7 @@ async function writeAuthRoutes(dest: string, opts: ScaffoldOptions): Promise<voi
   await issueRefreshToken(res, User, user.id);
   res.json({ message: 'Logged in' });`;
 
-  const loginContent = mongo
+  const loginContent = hasModels
     ? ts
       ? `import { issueToken } from 'express-file-cluster/auth';
 import type { Request, Response } from 'express';
@@ -690,9 +658,7 @@ ${logoutMeta}export const POST = async (_req, res) => {
     : '';
 
   const registerDbImports =
-    opts.database === 'mongodb'
-      ? `import bcrypt from 'bcrypt';\nimport crypto from 'node:crypto';\n${opts.mailer ? "import { enqueue } from 'express-file-cluster/tasks';\n" : ''}import { User } from '../../model/User.js';\n`
-      : '';
+    `import bcrypt from 'bcrypt';\nimport crypto from 'node:crypto';\n${opts.mailer ? "import { enqueue } from 'express-file-cluster/tasks';\n" : ''}import { User } from '../../model/User.js';\n`;
 
   const sendVerifyEmail = opts.mailer
     ? `
@@ -708,8 +674,7 @@ ${logoutMeta}export const POST = async (_req, res) => {
 `;
 
   const registerContent =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import type { Request, Response } from 'express';
 ${registerDbImports}${registerMeta}export const POST = async (req: Request, res: Response) => {
   const { name, email, password } = req.body;
@@ -739,26 +704,6 @@ ${sendVerifyEmail}
 ${sendVerifyEmail}
   const { password: _, verifyToken: __, ...safe } = user;
   res.status(201).json({ message: 'Account created successfully', user: safe });
-};
-`
-      : ts
-        ? `import type { Request, Response } from 'express';
-${registerMeta}export const POST = async (req: Request, res: Response) => {
-  const { name, email, password } = req.body;
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'name, email and password are required' });
-  }
-  // TODO: hash password and persist to DB
-  res.status(201).json({ message: 'Account created successfully' });
-};
-`
-        : `${registerMeta}export const POST = async (req, res) => {
-  const { name, email, password } = req.body;
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: 'name, email and password are required' });
-  }
-  // TODO: hash password and persist to DB
-  res.status(201).json({ message: 'Account created successfully' });
 };
 `;
 
@@ -807,7 +752,7 @@ async function writeAdminRoutes(dest: string, opts: ScaffoldOptions): Promise<vo
     : '';
 
   // Real stats need the User model, which only exists when userManagement is on.
-  const dashboardHasUserModel = opts.database === 'mongodb' && opts.adminFeatures.userManagement;
+  const dashboardHasUserModel = opts.adminFeatures.userManagement;
 
   const dashboardDbImport = dashboardHasUserModel
     ? `import { User } from '../../model/User.js';\n`
@@ -867,15 +812,12 @@ ${roleGuard}  // TODO: aggregate stats from DB
     : '';
 
   const adminUsersDbImport =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import bcrypt from 'bcrypt';\nimport { User } from '../../../model/User.js';\n`
-        : `import bcrypt from 'bcrypt';\nimport { User } from '../../../model/User.js';\n`
-      : '';
+        : `import bcrypt from 'bcrypt';\nimport { User } from '../../../model/User.js';\n`;
 
   const usersListContent =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { requireAuth } from 'express-file-cluster/auth';
 import type { Request, Response } from 'express';
 ${adminUsersDbImport}${usersListMeta}${middlewares}
@@ -917,36 +859,6 @@ ${roleGuard}  const { name, email, password, role } = req.body;
   const user = await User.create({ name, email, password: hashed, role: role ?? 'user' });
   const { password: _, ...safe } = user;
   res.status(201).json({ message: 'User created', user: safe });
-};
-`
-      : ts
-        ? `import { requireAuth } from 'express-file-cluster/auth';
-import type { Request, Response } from 'express';
-${usersListMeta}${middlewares}
-export const GET = async (_req: Request, res: Response) => {
-${roleGuard}  // TODO: fetch users from DB with pagination
-  res.json({ users: [], total: 0 });
-};
-
-export const POST = async (req: Request, res: Response) => {
-${roleGuard}  const { name, email, role } = req.body;
-  if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
-  // TODO: create user in DB
-  res.status(201).json({ message: 'User created', user: { id: 'new-id', name, email, role: role ?? 'user' } });
-};
-`
-        : `import { requireAuth } from 'express-file-cluster/auth';
-${usersListMeta}${middlewares}
-export const GET = async (_req, res) => {
-${roleGuard}  // TODO: fetch users from DB with pagination
-  res.json({ users: [], total: 0 });
-};
-
-export const POST = async (req, res) => {
-${roleGuard}  const { name, email, role } = req.body;
-  if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
-  // TODO: create user in DB
-  res.status(201).json({ message: 'User created', user: { id: 'new-id', name, email, role: role ?? 'user' } });
 };
 `;
 
@@ -962,11 +874,10 @@ ${roleGuard}  const { name, email, role } = req.body;
     : '';
 
   const adminUserByIdDbImport =
-    opts.database === 'mongodb' ? `import { User } from '../../../model/User.js';\n` : '';
+    `import { User } from '../../../model/User.js';\n`;
 
   const userByIdContent =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { requireAuth } from 'express-file-cluster/auth';
 import type { Request, Response } from 'express';
 ${adminUserByIdDbImport}${userByIdMeta}${middlewares}
@@ -1019,48 +930,6 @@ ${roleGuard}  const { id } = req.params;
   const user = await User.findById(id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   await User.delete(id);
-  res.json({ message: \`User \${id} deleted\` });
-};
-`
-      : ts
-        ? `import { requireAuth } from 'express-file-cluster/auth';
-import type { Request, Response } from 'express';
-${userByIdMeta}${middlewares}
-export const GET = async (req: Request, res: Response) => {
-${roleGuard}  const { id } = req.params;
-  // TODO: fetch user from DB
-  res.json({ user: { id } });
-};
-
-export const PUT = async (req: Request, res: Response) => {
-${roleGuard}  const { id } = req.params;
-  // TODO: update user in DB
-  res.json({ message: 'User updated', user: { id, ...req.body } });
-};
-
-export const DELETE = async (req: Request, res: Response) => {
-${roleGuard}  const { id } = req.params;
-  // TODO: delete user from DB
-  res.json({ message: \`User \${id} deleted\` });
-};
-`
-        : `import { requireAuth } from 'express-file-cluster/auth';
-${userByIdMeta}${middlewares}
-export const GET = async (req, res) => {
-${roleGuard}  const { id } = req.params;
-  // TODO: fetch user from DB
-  res.json({ user: { id } });
-};
-
-export const PUT = async (req, res) => {
-${roleGuard}  const { id } = req.params;
-  // TODO: update user in DB
-  res.json({ message: 'User updated', user: { id, ...req.body } });
-};
-
-export const DELETE = async (req, res) => {
-${roleGuard}  const { id } = req.params;
-  // TODO: delete user from DB
   res.json({ message: \`User \${id} deleted\` });
 };
 `;
@@ -1085,11 +954,10 @@ async function writeUserRoutes(dest: string, opts: ScaffoldOptions): Promise<voi
     : '';
 
   const profileDbImport =
-    opts.database === 'mongodb' ? `import { User } from '../../model/User.js';\n` : '';
+    `import { User } from '../../model/User.js';\n`;
 
   const profileContent =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { requireAuth } from 'express-file-cluster/auth';
 import type { Request, Response } from 'express';
 ${profileDbImport}${profileMeta}${middlewares}
@@ -1127,32 +995,6 @@ export const PUT = async (req, res) => {
   if (!updated) return res.status(404).json({ error: 'User not found' });
   const { password: _, ...safe } = updated;
   res.json({ message: 'Profile updated', user: safe });
-};
-`
-      : ts
-        ? `import { requireAuth } from 'express-file-cluster/auth';
-import type { Request, Response } from 'express';
-${profileMeta}${middlewares}
-export const GET = async (req: Request, res: Response) => {
-  res.json({ user: (req as any).user });
-};
-
-export const PUT = async (req: Request, res: Response) => {
-  const { name, email } = req.body;
-  // TODO: update user in DB
-  res.json({ message: 'Profile updated', user: { ...(req as any).user, name, email } });
-};
-`
-        : `import { requireAuth } from 'express-file-cluster/auth';
-${profileMeta}${middlewares}
-export const GET = async (req, res) => {
-  res.json({ user: req.user });
-};
-
-export const PUT = async (req, res) => {
-  const { name, email } = req.body;
-  // TODO: update user in DB
-  res.json({ message: 'Profile updated', user: { ...req.user, name, email } });
 };
 `;
 
@@ -1199,8 +1041,7 @@ async function writeSessionModel(dest: string, opts: ScaffoldOptions): Promise<v
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface SessionDocument {
@@ -1231,24 +1072,6 @@ export const Session = defineModel('Session', {
   expiresAt: { type: 'date',    required: true },
   isActive:  { type: 'boolean', default: true },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Session
-// import { pgTable, serial, text, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const sessions = pgTable('sessions', {
-//   id:        serial('id').primaryKey(),
-//   userId:    text('user_id').notNull(),
-//   token:     text('token').notNull().unique(),
-//   ip:        text('ip').notNull(),
-//   userAgent: text('user_agent').notNull(),
-//   expiresAt: timestamp('expires_at').notNull(),
-//   isActive:  boolean('is_active').notNull().default(true),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Session
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Session.${ext}`), content);
 }
@@ -1257,8 +1080,7 @@ async function writeNotificationModel(dest: string, opts: ScaffoldOptions): Prom
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface NotificationDocument {
@@ -1289,25 +1111,6 @@ export const Notification = defineModel('Notification', {
   isRead:  { type: 'boolean', default: false },
   link:    { type: 'string' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Notification
-// import { pgTable, serial, text, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const notifications = pgTable('notifications', {
-//   id:      serial('id').primaryKey(),
-//   userId:  text('user_id').notNull(),
-//   title:   text('title').notNull(),
-//   message: text('message').notNull(),
-//   type:    text('type').notNull().default('info'),
-//   isRead:  boolean('is_read').notNull().default(false),
-//   link:    text('link'),
-//   createdAt: timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Notification
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Notification.${ext}`), content);
 }
@@ -1316,8 +1119,7 @@ async function writeFileModel(dest: string, opts: ScaffoldOptions): Promise<void
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface FileDocument {
@@ -1351,26 +1153,6 @@ export const File = defineModel('File', {
   url:          { type: 'string',  required: true },
   isPublic:     { type: 'boolean', default: false },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for File
-// import { pgTable, serial, text, boolean, integer, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const files = pgTable('files', {
-//   id:           serial('id').primaryKey(),
-//   userId:       text('user_id').notNull(),
-//   filename:     text('filename').notNull(),
-//   originalName: text('original_name').notNull(),
-//   mimeType:     text('mime_type').notNull(),
-//   size:         integer('size').notNull(),
-//   url:          text('url').notNull(),
-//   isPublic:     boolean('is_public').notNull().default(false),
-//   createdAt:    timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for File
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `File.${ext}`), content);
 }
@@ -1379,8 +1161,7 @@ async function writeSupportTicketModel(dest: string, opts: ScaffoldOptions): Pro
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface SupportTicketDocument {
@@ -1411,26 +1192,6 @@ export const SupportTicket = defineModel('SupportTicket', {
   priority:   { type: 'string', required: true, default: 'normal' },
   assignedTo: { type: 'string' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for SupportTicket
-// import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const supportTickets = pgTable('support_tickets', {
-//   id:         serial('id').primaryKey(),
-//   userId:     text('user_id').notNull(),
-//   subject:    text('subject').notNull(),
-//   message:    text('message').notNull(),
-//   status:     text('status').notNull().default('open'),
-//   priority:   text('priority').notNull().default('normal'),
-//   assignedTo: text('assigned_to'),
-//   createdAt:  timestamp('created_at').defaultNow(),
-//   updatedAt:  timestamp('updated_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for SupportTicket
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `SupportTicket.${ext}`), content);
 }
@@ -1439,8 +1200,7 @@ async function writeAuditLogModel(dest: string, opts: ScaffoldOptions): Promise<
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface AuditLogDocument {
@@ -1471,25 +1231,6 @@ export const AuditLog = defineModel('AuditLog', {
   metadata: { type: 'object' },
   ip:       { type: 'string', required: true },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for AuditLog
-// import { pgTable, serial, text, jsonb, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const auditLogs = pgTable('audit_logs', {
-//   id:        serial('id').primaryKey(),
-//   adminId:   text('admin_id').notNull(),
-//   action:    text('action').notNull(),
-//   entity:    text('entity').notNull(),
-//   entityId:  text('entity_id').notNull(),
-//   metadata:  jsonb('metadata'),
-//   ip:        text('ip').notNull(),
-//   createdAt: timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for AuditLog
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `AuditLog.${ext}`), content);
 }
@@ -1498,8 +1239,7 @@ async function writeSubscriptionModel(dest: string, opts: ScaffoldOptions): Prom
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface SubscriptionDocument {
@@ -1530,25 +1270,6 @@ export const Subscription = defineModel('Subscription', {
   endDate:     { type: 'date',   required: true },
   cancelledAt: { type: 'date' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Subscription
-// import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const subscriptions = pgTable('subscriptions', {
-//   id:          serial('id').primaryKey(),
-//   userId:      text('user_id').notNull(),
-//   planId:      text('plan_id').notNull(),
-//   status:      text('status').notNull().default('active'),
-//   startDate:   timestamp('start_date').notNull(),
-//   endDate:     timestamp('end_date').notNull(),
-//   cancelledAt: timestamp('cancelled_at'),
-//   createdAt:   timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Subscription
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Subscription.${ext}`), content);
 }
@@ -1557,8 +1278,7 @@ async function writePlanModel(dest: string, opts: ScaffoldOptions): Promise<void
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface PlanDocument {
@@ -1589,25 +1309,6 @@ export const Plan = defineModel('Plan', {
   features:    { type: 'array',   default: [] },
   isActive:    { type: 'boolean', default: true },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Plan
-// import { pgTable, serial, text, numeric, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const plans = pgTable('plans', {
-//   id:          serial('id').primaryKey(),
-//   name:        text('name').notNull(),
-//   description: text('description').notNull(),
-//   price:       numeric('price').notNull(),
-//   interval:    text('interval').notNull().default('monthly'),
-//   features:    text('features').array().notNull().default([]),
-//   isActive:    boolean('is_active').notNull().default(true),
-//   createdAt:   timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Plan
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Plan.${ext}`), content);
 }
@@ -1616,8 +1317,7 @@ async function writeInvoiceModel(dest: string, opts: ScaffoldOptions): Promise<v
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface InvoiceDocument {
@@ -1648,25 +1348,6 @@ export const Invoice = defineModel('Invoice', {
   status:         { type: 'string', required: true, default: 'pending' },
   paidAt:         { type: 'date' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Invoice
-// import { pgTable, serial, text, numeric, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const invoices = pgTable('invoices', {
-//   id:             serial('id').primaryKey(),
-//   userId:         text('user_id').notNull(),
-//   subscriptionId: text('subscription_id').notNull(),
-//   amount:         numeric('amount').notNull(),
-//   currency:       text('currency').notNull().default('USD'),
-//   status:         text('status').notNull().default('pending'),
-//   paidAt:         timestamp('paid_at'),
-//   createdAt:      timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Invoice
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Invoice.${ext}`), content);
 }
@@ -1675,8 +1356,7 @@ async function writeApiKeyModel(dest: string, opts: ScaffoldOptions): Promise<vo
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface ApiKeyDocument {
@@ -1707,25 +1387,6 @@ export const ApiKey = defineModel('ApiKey', {
   expiresAt: { type: 'date' },
   isActive:  { type: 'boolean', default: true },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for ApiKey
-// import { pgTable, serial, text, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const apiKeys = pgTable('api_keys', {
-//   id:        serial('id').primaryKey(),
-//   userId:    text('user_id').notNull(),
-//   name:      text('name').notNull(),
-//   key:       text('key').notNull().unique(),
-//   lastUsed:  timestamp('last_used'),
-//   expiresAt: timestamp('expires_at'),
-//   isActive:  boolean('is_active').notNull().default(true),
-//   createdAt: timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for ApiKey
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `ApiKey.${ext}`), content);
 }
@@ -1734,8 +1395,7 @@ async function writeRoleModel(dest: string, opts: ScaffoldOptions): Promise<void
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface RoleDocument {
@@ -1757,22 +1417,6 @@ export const Role = defineModel('Role', {
   description: { type: 'string', required: true },
   permissions: { type: 'array',  default: [] },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Role
-// import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const roles = pgTable('roles', {
-//   id:          serial('id').primaryKey(),
-//   name:        text('name').notNull().unique(),
-//   description: text('description').notNull(),
-//   permissions: text('permissions').array().notNull().default([]),
-//   createdAt:   timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Role
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Role.${ext}`), content);
 }
@@ -1781,8 +1425,7 @@ async function writeFAQModel(dest: string, opts: ScaffoldOptions): Promise<void>
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface FAQDocument {
@@ -1810,24 +1453,6 @@ export const FAQ = defineModel('FAQ', {
   order:       { type: 'number',  default: 0 },
   isPublished: { type: 'boolean', default: false },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for FAQ
-// import { pgTable, serial, text, boolean, integer, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const faqs = pgTable('faqs', {
-//   id:          serial('id').primaryKey(),
-//   question:    text('question').notNull(),
-//   answer:      text('answer').notNull(),
-//   category:    text('category').notNull().default('general'),
-//   order:       integer('order').notNull().default(0),
-//   isPublished: boolean('is_published').notNull().default(false),
-//   createdAt:   timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for FAQ
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `FAQ.${ext}`), content);
 }
@@ -1836,8 +1461,7 @@ async function writeBlogModel(dest: string, opts: ScaffoldOptions): Promise<void
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface BlogDocument {
@@ -1874,28 +1498,6 @@ export const Blog = defineModel('Blog', {
   status:      { type: 'string', required: true, default: 'draft' },
   publishedAt: { type: 'date' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Blog
-// import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const blogs = pgTable('blogs', {
-//   id:          serial('id').primaryKey(),
-//   title:       text('title').notNull(),
-//   slug:        text('slug').notNull().unique(),
-//   content:     text('content').notNull(),
-//   authorId:    text('author_id').notNull(),
-//   category:    text('category').notNull().default('general'),
-//   tags:        text('tags').array().notNull().default([]),
-//   status:      text('status').notNull().default('draft'),
-//   publishedAt: timestamp('published_at'),
-//   createdAt:   timestamp('created_at').defaultNow(),
-//   updatedAt:   timestamp('updated_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Blog
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Blog.${ext}`), content);
 }
@@ -1904,8 +1506,7 @@ async function writeCategoryModel(dest: string, opts: ScaffoldOptions): Promise<
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface CategoryDocument {
@@ -1930,23 +1531,6 @@ export const Category = defineModel('Category', {
   description: { type: 'string' },
   parentId:    { type: 'string' },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Category
-// import { pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const categories = pgTable('categories', {
-//   id:          serial('id').primaryKey(),
-//   name:        text('name').notNull(),
-//   slug:        text('slug').notNull().unique(),
-//   description: text('description'),
-//   parentId:    text('parent_id'),
-//   createdAt:   timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Category
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Category.${ext}`), content);
 }
@@ -1955,8 +1539,7 @@ async function writeCouponModel(dest: string, opts: ScaffoldOptions): Promise<vo
   const ext = opts.language === 'typescript' ? 'ts' : 'js';
   const ts = opts.language === 'typescript';
   const content =
-    opts.database === 'mongodb'
-      ? ts
+    ts
         ? `import { defineModel } from 'express-file-cluster';
 
 export interface CouponDocument {
@@ -1990,26 +1573,6 @@ export const Coupon = defineModel('Coupon', {
   expiresAt: { type: 'date' },
   isActive:  { type: 'boolean', default: true },
 });
-`
-      : ts
-        ? `// TODO: define your Drizzle schema for Coupon
-// import { pgTable, serial, text, numeric, integer, boolean, timestamp } from 'drizzle-orm/pg-core';
-//
-// export const coupons = pgTable('coupons', {
-//   id:        serial('id').primaryKey(),
-//   code:      text('code').notNull().unique(),
-//   type:      text('type').notNull().default('percent'),
-//   value:     numeric('value').notNull(),
-//   maxUses:   integer('max_uses').notNull().default(0),
-//   usedCount: integer('used_count').notNull().default(0),
-//   expiresAt: timestamp('expires_at'),
-//   isActive:  boolean('is_active').notNull().default(true),
-//   createdAt: timestamp('created_at').defaultNow(),
-// });
-export {};
-`
-        : `// TODO: define your Drizzle schema for Coupon
-export {};
 `;
   await fs.outputFile(path.join(dest, 'src', 'model', `Coupon.${ext}`), content);
 }
@@ -2024,8 +1587,6 @@ async function writeAuthExtendedRoutes(dest: string, opts: ScaffoldOptions): Pro
     : `export const middlewares = [requireAuth];\n`;
   const mwUser3 = mwUser2;
   const RA = `import { requireAuth } from 'express-file-cluster/auth';\n`;
-
-  const mongo = opts.database === 'mongodb';
   const hasAdmin = opts.adminPortal;
   const uf = opts.userFeatures;
   const sendResetEmail = opts.mailer
@@ -2071,8 +1632,7 @@ async function writeAuthExtendedRoutes(dest: string, opts: ScaffoldOptions): Pro
       ? `  if (user) await User.update(user.id, { refreshToken: newRefreshToken, refreshTokenExpiry });
   else if (admin) await Admin.update(admin.id, { refreshToken: newRefreshToken, refreshTokenExpiry });`
       : `  await User.update(user.id, { refreshToken: newRefreshToken, refreshTokenExpiry });`;
-    const refreshContent = mongo
-      ? ts
+    const refreshContent = ts
         ? `import { issueToken } from 'express-file-cluster/auth';
 import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
@@ -2131,18 +1691,6 @@ ${refreshPersist}
   await issueToken(res, { id: account.id, role: account.role, email: account.email });
   res.json({ message: 'Token refreshed' });
 };
-`
-      : ts
-        ? `${RA}import type { Request, Response } from 'express';
-${refreshMeta}export const POST = async (_req: Request, res: Response) => {
-  // TODO: validate refresh token, issue new JWT
-  res.json({ message: 'Token refreshed' });
-};
-`
-        : `${RA}${refreshMeta}export const POST = async (_req, res) => {
-  // TODO: validate refresh token, issue new JWT
-  res.json({ message: 'Token refreshed' });
-};
 `;
     await fs.outputFile(path.join(dest, 'src', 'api', 'auth', `refresh.${ext}`), refreshContent);
   }
@@ -2161,8 +1709,7 @@ ${refreshMeta}export const POST = async (_req: Request, res: Response) => {
         response: `{ message: 'Verification email sent' }`,
       },
     });
-    const veContent = mongo
-      ? ts
+    const veContent = ts
         ? `import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
 ${mailerTaskImport}import { User } from '../../model/User.js';
@@ -2215,30 +1762,6 @@ ${sendVerifyEmailResend}  }
 
   res.json({ message: 'Verification email sent' });
 };
-`
-      : ts
-        ? `${RA}import type { Request, Response } from 'express';
-${veMeta}export const GET = async (req: Request, res: Response) => {
-  const { token } = req.query;
-  // TODO: verify token and mark user as verified
-  res.json({ message: 'Email verified' });
-};
-
-export const POST = async (_req: Request, res: Response) => {
-  // TODO: resend verification email
-  res.json({ message: 'Verification email sent' });
-};
-`
-        : `${RA}${veMeta}export const GET = async (req, res) => {
-  const { token } = req.query;
-  // TODO: verify token and mark user as verified
-  res.json({ message: 'Email verified' });
-};
-
-export const POST = async (_req, res) => {
-  // TODO: resend verification email
-  res.json({ message: 'Verification email sent' });
-};
 `;
     await fs.outputFile(path.join(dest, 'src', 'api', 'auth', `verify-email.${ext}`), veContent);
   }
@@ -2262,8 +1785,7 @@ export const POST = async (_req, res) => {
       ? `    if (user) await User.update(user.id, { resetToken, resetTokenExpiry });
     else if (admin) await Admin.update(admin.id, { resetToken, resetTokenExpiry });`
       : `    await User.update(user.id, { resetToken, resetTokenExpiry });`;
-    const fpContent = mongo
-      ? ts
+    const fpContent = ts
         ? `import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
 ${mailerTaskImport}${fpModelImports}${fpMeta}const RESET_TOKEN_TTL_MS = 1000 * 60 * 60; // 1 hour
@@ -2304,22 +1826,6 @@ ${sendResetEmail}  }
 
   res.json({ message: 'Reset email sent' });
 };
-`
-      : ts
-        ? `${RA}import type { Request, Response } from 'express';
-${fpMeta}export const POST = async (req: Request, res: Response) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'email is required' });
-  // TODO: generate reset token and send email
-  res.json({ message: 'Reset email sent' });
-};
-`
-        : `${RA}${fpMeta}export const POST = async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'email is required' });
-  // TODO: generate reset token and send email
-  res.json({ message: 'Reset email sent' });
-};
 `;
     await fs.outputFile(path.join(dest, 'src', 'api', 'auth', `forgot-password.${ext}`), fpContent);
 
@@ -2342,8 +1848,7 @@ ${fpMeta}export const POST = async (req: Request, res: Response) => {
       ? `  if (user) await User.update(user.id, { password: hashed, resetToken: '' });
   else if (admin) await Admin.update(admin.id, { password: hashed, resetToken: '' });`
       : `  await User.update(user.id, { password: hashed, resetToken: '' });`;
-    const rpContent = mongo
-      ? ts
+    const rpContent = ts
         ? `import type { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 ${rpModelImports}${rpMeta}export const POST = async (req: Request, res: Response) => {
@@ -2376,22 +1881,6 @@ ${rpLookup}
   const hashed = await bcrypt.hash(password, 10);
 ${rpPersist}
 
-  res.json({ message: 'Password reset successfully' });
-};
-`
-      : ts
-        ? `${RA}import type { Request, Response } from 'express';
-${rpMeta}export const POST = async (req: Request, res: Response) => {
-  const { token, password } = req.body;
-  if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
-  // TODO: validate token, hash and update password
-  res.json({ message: 'Password reset successfully' });
-};
-`
-        : `${RA}${rpMeta}export const POST = async (req, res) => {
-  const { token, password } = req.body;
-  if (!token || !password) return res.status(400).json({ error: 'token and password are required' });
-  // TODO: validate token, hash and update password
   res.json({ message: 'Password reset successfully' });
 };
 `;
@@ -4538,4 +4027,35 @@ ${roleGuard}  const { status, page = 1, limit = 20 } = req.query;
       adminSubsContent,
     );
   }
+}
+
+// Creates every generated model's table/collection (plus indexes) on `efc db migrate`.
+// Required on PostgreSQL before first boot; on MongoDB it builds the unique indexes.
+async function writeInitMigration(dest: string, opts: ScaffoldOptions): Promise<void> {
+  const modelDir = path.join(dest, 'src', 'model');
+  if (!(await fs.pathExists(modelDir))) return;
+  const ts = opts.language === 'typescript';
+  const ext = ts ? 'ts' : 'js';
+  const names = (await fs.readdir(modelDir))
+    .filter((f) => f.endsWith(`.${ext}`))
+    .map((f) => f.slice(0, -(ext.length + 1)))
+    .sort();
+  if (names.length === 0) return;
+
+  const imports = names.map((n) => `import { ${n} } from '../model/${n}.js';`).join('\n');
+  const typeImport = ts ? "import type { MigrationContext } from 'express-file-cluster';\n" : '';
+  const sig = ts ? '(_ctx: MigrationContext): Promise<void>' : '()';
+  const content = `${typeImport}${imports}
+
+const models = [${names.join(', ')}];
+
+export async function up${sig} {
+  for (const model of models) await model.sync();
+}
+
+export async function down${sig} {
+  for (const model of [...models].reverse()) await model.drop();
+}
+`;
+  await fs.outputFile(path.join(dest, 'src', 'migrations', `00000000000000_init.${ext}`), content);
 }

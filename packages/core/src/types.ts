@@ -347,6 +347,8 @@ export interface ModelCRUD<T extends object> {
    * alters existing data. Call it from a migration (`efc db migrate`).
    */
   sync(): Promise<void>;
+  /** Drops the collection/table and all its data. For migration `down()` functions. */
+  drop(): Promise<void>;
 }
 
 /** Passed to migration `up`/`down` functions and seed functions. */

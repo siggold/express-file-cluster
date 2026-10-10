@@ -29,10 +29,14 @@ async function main(): Promise<void> {
   });
   if (p.isCancel(language)) cancel();
 
-  // MongoDB is the only adapter the runtime connects today; PostgreSQL (Drizzle) is Phase 2.
-  // Offering it here would generate a project whose database is never connected.
-  const database: ScaffoldOptions['database'] = 'mongodb';
-  p.log.info(`Database: MongoDB ${pc.dim('(PostgreSQL arrives in Phase 2)')}`);
+  const database = await p.select({
+    message: 'Database:',
+    options: [
+      { value: 'mongodb', label: 'MongoDB', hint: 'Mongoose' },
+      { value: 'postgresql', label: 'PostgreSQL', hint: 'Drizzle ORM' },
+    ],
+  });
+  if (p.isCancel(database)) cancel();
 
   const authStrategy = await p.select({
     message: 'Authentication strategy:',
@@ -47,7 +51,7 @@ async function main(): Promise<void> {
     message: 'Features: (space to toggle, enter to confirm)',
     options: [
       { value: 'cluster',    label: 'Multi-core clustering',          hint: 'Node cluster module' },
-      { value: 'tasks',      label: 'Background tasks',               hint: 'BullMQ (Redis)' },
+      { value: 'tasks',      label: 'Background tasks',               hint: 'BullMQ / pg-boss' },
       { value: 'routeDocs',  label: 'API route documentation',        hint: 'meta exports + dashboard' },
       { value: 'userPortal', label: 'User portal',                    hint: 'auth, profile, billing routes' },
       { value: 'adminPortal',label: 'Admin portal',                   hint: 'dashboard, user mgmt, analytics' },
@@ -125,11 +129,21 @@ async function main(): Promise<void> {
     };
   }
 
-  // BullMQ is the only backend the runtime starts; pg-boss is Phase 2.
   let taskBackend: ScaffoldOptions['taskBackend'];
   if (selected.has('tasks')) {
-    taskBackend = 'bullmq';
-    p.log.info(`Task queue: BullMQ (Redis) ${pc.dim('(pg-boss arrives in Phase 2)')}`);
+    const backend = await p.select({
+      message: 'Task queue backend:',
+      options: [
+        { value: 'bullmq', label: 'BullMQ', hint: 'Redis' },
+        {
+          value: 'pg-boss',
+          label: 'pg-boss',
+          hint: database === 'postgresql' ? 'uses your PostgreSQL — no Redis' : 'needs PostgreSQL',
+        },
+      ],
+    });
+    if (p.isCancel(backend)) cancel();
+    taskBackend = backend as ScaffoldOptions['taskBackend'];
   }
 
   let smtpProvider: ScaffoldOptions['smtpProvider'];
@@ -200,7 +214,7 @@ async function main(): Promise<void> {
   const opts: ScaffoldOptions = {
     projectName: projectName as string,
     language: language as ScaffoldOptions['language'],
-    database,
+    database: database as ScaffoldOptions['database'],
     authStrategy: authStrategy as ScaffoldOptions['authStrategy'],
     cluster:     selected.has('cluster'),
     tasks:       selected.has('tasks'),
@@ -249,11 +263,14 @@ async function main(): Promise<void> {
     );
   }
 
+  // The generated init migration creates the tables (PostgreSQL) / indexes (MongoDB).
+  const hasMigrations = opts.userPortal || opts.adminPortal;
   p.outro(
     pc.green(`\nYour project is ready!\n\n`) +
       pc.dim(`  cd ${projectName as string}\n`) +
+      (hasMigrations ? pc.dim(`  efc db migrate\n`) : '') +
       pc.dim(`  efc start dev\n`) +
-      pc.dim(`\n  (or: npm run dev)\n`),
+      pc.dim(`\n  (or: ${hasMigrations ? 'npm run db:migrate && ' : ''}npm run dev)\n`),
   );
 }
 

@@ -386,5 +386,12 @@ export function mongoModel<T extends object>(
       });
       await M.syncIndexes();
     },
+
+    async drop() {
+      const M = await model();
+      await M.collection.drop().catch((err: { code?: number }) => {
+        if (err?.code !== 26) throw err; // 26 = NamespaceNotFound
+      });
+    },
   };
 }

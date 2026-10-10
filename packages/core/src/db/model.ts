@@ -37,6 +37,7 @@ export function defineModel<T extends object>(
     aggregate: (pipeline) => impl().aggregate(pipeline),
     raw: () => impl().raw(),
     sync: () => impl().sync(),
+    drop: () => impl().drop(),
   };
   registerModel(model as unknown as ModelCRUD<object>);
   return model;
