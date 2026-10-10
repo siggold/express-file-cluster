@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 import fs from 'fs-extra';
 import { scaffold, NO_ADMIN_FEATURES, NO_USER_FEATURES } from '../scaffold.js';
 import type { AdminFeatures, UserFeatures } from '../scaffold.js';
@@ -73,8 +74,11 @@ function freePort(): Promise<number> {
   });
 }
 
+// CI runners force colour output on; compare CLI text without ANSI escapes.
 function run(cmd: string, args: string[], cwd: string): string {
-  return execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return stripVTControlCharacters(
+    execFileSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+  );
 }
 
 describe.skipIf(!RUN).each(STACKS)('create-efc-app — end to end ($label)', (stack) => {
