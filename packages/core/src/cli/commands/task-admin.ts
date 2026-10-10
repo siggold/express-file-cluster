@@ -29,8 +29,11 @@ async function connect(opts: AdminOpts): Promise<TaskAdmin> {
     (redisUrl ? 'bullmq' : databaseUrl?.startsWith('postgres') ? 'pg-boss' : 'bullmq');
 
   if (backend === 'bullmq') return bullmqAdmin(redisUrl ?? 'redis://localhost:6379', opts.queue);
-  if (backend === 'pg-boss')
-    throw new Error('[EFC] pg-boss dead-letter inspection is not wired yet');
+  if (backend === 'pg-boss') {
+    if (!databaseUrl) throw new Error('[EFC] pg-boss needs DATABASE_URL (or --database-url)');
+    const { pgBossAdmin } = await import('../../tasks/pgboss-backend.js');
+    return pgBossAdmin(databaseUrl, opts.queue);
+  }
   throw new Error(`[EFC] Unknown task backend: ${backend}`);
 }
 

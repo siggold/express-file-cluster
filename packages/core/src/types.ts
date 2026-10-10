@@ -6,7 +6,12 @@ export type TaskBackend = 'bullmq' | 'pg-boss';
 
 export interface TaskConfig {
   backend: TaskBackend;
+  /** BullMQ only. Default: redis://localhost:6379. */
   redisUrl?: string;
+  /** pg-boss only. Default: `databaseUrl`. */
+  connectionString?: string;
+  /** pg-boss only: Postgres schema for its tables. Default: 'pgboss'. */
+  schema?: string;
   concurrency?: number;
   /** Max milliseconds `enqueue()` waits for Redis before rejecting. Default: 5000. */
   enqueueTimeout?: number;

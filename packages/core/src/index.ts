@@ -20,6 +20,7 @@ import { runWithContext } from './context.js';
 import { configureLogger, getLogger, requestLogger } from './logger.js';
 import { scanTasks } from './tasks/scanner.js';
 import { initBullMQ, closeBullMQ } from './tasks/bullmq-backend.js';
+import { initPgBoss, closePgBoss } from './tasks/pgboss-backend.js';
 import { generateDashboard } from './dashboard.js';
 
 function detectDatabase(url?: string): 'mongodb' | 'postgresql' | undefined {
@@ -145,6 +146,20 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
         enqueueTimeout: config.tasks.enqueueTimeout ?? 5000,
         queue: config.tasks.queue ?? 'efc',
       });
+    } else if (config.tasks.backend === 'pg-boss') {
+      const connectionString = config.tasks.connectionString ?? databaseUrl;
+      if (!connectionString) {
+        throw new Error(
+          '[EFC] tasks.backend "pg-boss" needs tasks.connectionString or databaseUrl',
+        );
+      }
+      await initPgBoss({
+        connectionString,
+        concurrency: config.tasks.concurrency ?? 5,
+        enqueueTimeout: config.tasks.enqueueTimeout ?? 5000,
+        queue: config.tasks.queue ?? 'efc',
+        ...(config.tasks.schema !== undefined && { schema: config.tasks.schema }),
+      });
     }
   }
 
@@ -178,13 +193,11 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
         if (isHttpError(err)) {
           // ModelValidationError carries per-field issues; surface them like route validation does.
           const issues = (err as { issues?: unknown }).issues;
-          res
-            .status(err.statusCode)
-            .json({
-              error: err.message,
-              statusCode: err.statusCode,
-              ...(issues !== undefined && { issues }),
-            });
+          res.status(err.statusCode).json({
+            error: err.message,
+            statusCode: err.statusCode,
+            ...(issues !== undefined && { issues }),
+          });
         } else if (duckTyped) {
           res
             .status(duckTyped.statusCode)
@@ -224,7 +237,7 @@ export function gracefulShutdown(server: http.Server | undefined, timeoutMs = 10
       server.close(() => {
         getLogger().info('Server closed');
         // Let in-flight task jobs finish before exiting; the timeout below still caps it.
-        closeBullMQ()
+        Promise.all([closeBullMQ(), closePgBoss()])
           .catch((err: unknown) => getLogger().error({ err }, 'Task backend close failed'))
           .finally(() => process.exit(0));
       });
