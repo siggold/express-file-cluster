@@ -1,21 +1,6 @@
 # Role-Based Access Control (RBAC)
 
-Role checks are built into `requireAuth` itself — call it with role names (`requireAuth('admin')`) instead of a separate middleware (see [Authentication](./authentication.md)). `create-efc-app` can also scaffold a `Role` model and role-management API for you via the **RBAC** feature option.
-
----
-
-## Enabling it
-
-Toggle **Role-based access control** in the features multiselect:
-
-```
-? Features: (space to toggle, enter to confirm)
-    ◉ User portal
-    ◉ Admin portal
-    ◉ Role-based access control
-```
-
-RBAC is most useful alongside **User portal** and/or **Admin portal**, since it changes how their generated routes are protected — but it can be toggled independently.
+Role checks are built into `requireAuth` itself — call it with role names (`requireAuth('admin')`) instead of a separate middleware (see [Authentication](./authentication.md)). The routes the registry generates use it throughout, and the `admin-admins` item adds a `Role` model and a role-management API.
 
 ---
 
@@ -23,7 +8,7 @@ RBAC is most useful alongside **User portal** and/or **Admin portal**, since it 
 
 ### Route protection
 
-Every generated route that would otherwise export `middlewares = [requireAuth]` instead exports:
+Every protected route that [`efc add`](../cli/add.md) or `create-efc-app` generates checks roles with `requireAuth(...)`:
 
 ```ts
 // User-facing routes
@@ -33,31 +18,11 @@ export const middlewares = [requireAuth('user', 'admin')];
 export const middlewares = [requireAuth('admin')];
 ```
 
-`requireAuth('admin')` verifies the JWT *and* checks that `payload.role` is one of the given roles — returning `401` if the token is missing/invalid, `403` if the role doesn't match.
+`requireAuth('admin')` verifies the JWT *and* checks that `payload.role` is one of the given roles. It returns `401` if the token is missing or invalid, and `403` if the role doesn't match.
 
-If RBAC is **not** enabled, admin routes fall back to an inline guard at the top of the handler instead:
+### `Role` model and role management
 
-```ts
-export const middlewares = [requireAuth];
-
-export const GET = async (req, res) => {
-  const user = (req as any).user;
-  if (user?.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden: Admin access required' });
-  }
-  // ...
-};
-```
-
-Both approaches produce the same 401/403 behavior — RBAC-on just centralizes the check into `requireAuth(...)` and adds the `Role` model below.
-
-### `Role` model
-
-A `src/model/Role.ts` model is created (`defineModel` on MongoDB, `defineTable` on PostgreSQL by default).
-
-### Admin role management routes
-
-If **RBAC** and **Admin portal** are both enabled, a full role-management API is scaffolded:
+`efc add admin-admins` creates `src/model/Role.ts` (`defineModel` on MongoDB, `defineTable` on PostgreSQL by default) and a role-management API:
 
 | Method | Path |
 |---|---|

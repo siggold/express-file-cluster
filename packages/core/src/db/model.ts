@@ -154,6 +154,7 @@ export function createModel<T extends object, C = Partial<T>>(
   registerModel({
     name,
     sync: model.sync,
+    plan: (opts) => call((m) => m.plan(opts)),
     drop: model.drop,
     findByIds: (ids) => model.find({ id: { $in: ids as string[] } } as never),
     pgTarget: () => ({ table: options.collection ?? tableNameFor(name), idKind: 'uuid' }),

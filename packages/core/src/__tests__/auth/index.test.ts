@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
-import { configureAuth, issueToken, revokeToken, signToken, requireAuth } from '../../auth/index.js';
+import {
+  configureAuth,
+  issueToken,
+  revokeToken,
+  signToken,
+  requireAuth,
+} from '../../auth/index.js';
 
 function makeApp() {
   const app = express();

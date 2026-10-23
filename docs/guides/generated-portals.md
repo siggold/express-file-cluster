@@ -1,26 +1,35 @@
 # Generated Portals — User & Admin
 
-`create-efc-app`'s **User portal** and **Admin portal** feature options scaffold a large, ready-to-run set of models and routes — everything from auth extras (2FA, sessions, password reset) to admin content management (blogs, FAQs, coupons). This page is the complete inventory, so nothing you didn't ask for shows up as a surprise, and nothing you did enable goes undocumented.
+The user and admin portals are a set of **registry items**: ready-made models and routes you pick in `create-efc-app` or add later with [`efc add`](../cli/add.md), anything from auth extras (2FA, sessions, password reset) to admin content management (blogs, FAQs, coupons). This page lists every route each item adds, so nothing you didn't ask for shows up as a surprise, and nothing you did add goes undocumented.
 
-> Every model below is real on both databases. On MongoDB they're `defineModel` collections. On PostgreSQL they're [`defineTable`](../api-reference/table.md) models (or `defineModel`, if you picked it) linked by foreign keys — `Session`, `Notification`, `File`, `SupportTicket`, `Subscription`, `Invoice` and `ApiKey` reference `User` (deleted with it), `Subscription` references `Plan`, `Invoice` its `Subscription`, `AuditLog`, `Blog` and assigned tickets an `Admin` (cleared when it's deleted), and `Category` its parent — with matching `relations` (`user.sessions`, `plan.subscriptions`, `category.children`…) for `include`. A reference stays a plain id when its target model isn't generated. See [Database](./database.md).
+> Every model below is real on both databases. On MongoDB they're `defineModel` collections. On PostgreSQL they're [`defineTable`](../api-reference/table.md) models (or `defineModel`, if you picked it) linked by foreign keys. `Session`, `Notification`, `File`, `SupportTicket`, `Subscription`, `Invoice` and `ApiKey` reference `User` and are deleted with it. `Subscription` references `Plan`, and `Invoice` references its `Subscription`. `AuditLog`, `Blog` and assigned tickets reference an `Admin`, which is cleared when the admin is deleted. `Category` references its parent. Models carry no back-relations, so each feature stays self-contained. Add `relations` to a model when you want `include` (e.g. `user.sessions`). See [Database](./database.md).
 
 ---
 
-## Always generated (regardless of portal choices)
+## auth
 
-- `POST /auth/login`
-- `POST /auth/logout`
-- `src/model/User.ts`
+`efc add auth` (every other item depends on it):
+
+- `src/model/User.ts`, `src/model/Admin.ts`
+- `POST /auth/register`, `POST /auth/login` (users and admins), `POST /auth/logout`, `GET /auth/me`
+
+`efc add auth@google` / `auth@apple` add OAuth sign-in for users (`GET /auth/google` + `/auth/google/callback`, `GET /auth/apple` + `POST /auth/apple/callback`, `OAuthAccount` model). See [Sign in with Google & Apple](./oauth.md).
 
 ---
 
 ## User portal
 
-Toggling **User portal** adds:
-
-### Models
-
-`User` (extended), `Session`, `Notification`, `File`, `SupportTicket`, `Subscription`, `Invoice`, `ApiKey`
+| Item | Routes below |
+|---|---|
+| `user-profile` | Profile: `/user/profile` |
+| `forgot-password` | Auth: forgot / reset password |
+| `account-security` | Auth: refresh, change password, 2FA, sessions (+ `Session`) |
+| `email-verification` | Auth: verify email |
+| `account-settings` | Profile: avatar, settings, account, dashboard, activity |
+| `notifications` | Notifications (+ `Notification`) |
+| `files` | Files, favorites / bookmarks, search (+ `File`) |
+| `billing` | API keys, billing (+ `Plan`, `Subscription`, `Invoice`, `ApiKey`) |
+| `support` | Support (+ `SupportTicket`) |
 
 ### Routes
 
@@ -58,17 +67,25 @@ Toggling **User portal** adds:
 | Support | `GET /support/tickets`, `POST /support/tickets` |
 | | `GET /support/tickets/:id`, `PUT /support/tickets/:id` |
 
-All protected routes export `middlewares = [requireAuth]` — or `[requireAuth('user', 'admin')]` if [RBAC](./rbac.md) is also enabled.
+Protected routes export `middlewares = [requireAuth('user', 'admin')]` (see [RBAC](./rbac.md)).
 
 ---
 
 ## Admin portal
 
-Toggling **Admin portal** adds:
+| Item | Routes below |
+|---|---|
+| `admin` | Dashboard |
+| `admin-users` | Users |
+| `admin-admins` | Admins, Roles (+ `Role`) |
+| `admin-analytics` | Analytics |
+| `admin-content` | Content (+ `FAQ`, `Blog`, `Category`) |
+| `admin-billing` | Billing (+ `Plan`, `Coupon`) |
+| `admin-support` | Support (+ `SupportTicket`) |
+| `admin-logs` | Notifications, Logs (+ `AuditLog`, `Notification`) |
+| `admin-system` | Settings, System |
 
-### Models
-
-`Admin`, `SupportTicket` (shared with User portal if both enabled), `AuditLog`, `Plan` (shared), `FAQ`, `Blog`, `Category`, `Coupon`
+`Plan`, `SupportTicket` and `Notification` are shared with the user-portal items: both write the same file, and the second add skips it.
 
 ### Routes
 
@@ -100,10 +117,10 @@ Toggling **Admin portal** adds:
 | Billing — Coupons | `GET /admin/billing/coupons`, `POST /admin/billing/coupons` |
 | | `GET/PUT/DELETE /admin/billing/coupons/:id` |
 | Billing — Subscriptions | `GET /admin/billing/subscriptions` |
-| Roles *(only if RBAC also enabled)* | `GET /admin/roles`, `POST /admin/roles` |
+| Roles | `GET /admin/roles`, `POST /admin/roles` |
 | | `GET/PUT/DELETE /admin/roles/:id` |
 
-All admin routes export `middlewares = [requireAuth('admin')]` if [RBAC](./rbac.md) is enabled — otherwise `middlewares = [requireAuth]` and each handler inline-checks `user.role === 'admin'`.
+All admin routes export `middlewares = [requireAuth('admin')]` (see [RBAC](./rbac.md)).
 
 ---
 

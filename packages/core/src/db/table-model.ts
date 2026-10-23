@@ -2044,6 +2044,7 @@ export function createTable(name: string, schema: TableSchema, options: TableOpt
   registerModel({
     name,
     sync: model.sync,
+    plan: (opts) => call((r) => r.tbl.plan(opts)),
     drop: model.drop,
     findByIds: (ids) => model.findMany({ where: { id: { in: ids } } }),
     pgTarget: () => ({ table: rt().tbl.table, idKind: rt().tbl.idKind }),

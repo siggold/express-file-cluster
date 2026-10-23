@@ -27,9 +27,9 @@
 EFC is an opinionated backend framework built on Express. Drop files in `src/api/` and they become routes. Every CPU core serves traffic automatically. One model API runs on MongoDB or PostgreSQL. Heavy work goes to a queue-backed task system — Redis or Postgres — so your request handlers stay fast.
 
 ```bash
-npx create-efc-app my-api
+npx create-efc-app my-api      # the base: server, src/api, src/tasks, database
 cd my-api
-efc db migrate
+efc add auth billing admin     # grow it — features are copied in as your own source
 efc start dev
 ```
 
@@ -82,7 +82,7 @@ EFC collapses all of that into conventions:
 npx create-efc-app my-api
 ```
 
-The interactive scaffolder asks for language, database, auth strategy, clustering, and task queue — then generates everything including a `.env` with a real `JWT_SECRET`.
+The interactive scaffolder asks for language, database, task queue and clustering, then writes the **base** app: the server, `src/api`, `src/tasks` and the database, plus a `.env` with a real `JWT_SECRET`. Features (auth incl. Sign in with Google / Apple, user and admin portals, billing, an email client…) are optional at creation. Add them any time with `efc add`, which works like [shadcn/ui](https://ui.shadcn.com): each feature's routes and models are copied into your app as source you own. See [efc add](docs/cli/add.md).
 
 **Add to an existing Express project:**
 
@@ -554,6 +554,13 @@ efc start prod                       # Run dist/src/index.js with clustering ena
 
 # Testing
 efc run tests                        # Vitest (--watch, --coverage passthrough)
+
+# Features (copied into your app — see docs/cli/add.md)
+efc list                             # What can be added
+efc add auth forgot-password         # Add features (+ their dependencies, packages, env vars)
+efc add email-client                 # …asks for SMTP settings; auth@google / auth@apple ask for OAuth credentials
+efc view billing                     # Print an item's files before adding it
+efc diff                             # Compare installed features with the registry
 
 # Code generation
 efc generate route users/[id]        # → src/api/users/[id].ts

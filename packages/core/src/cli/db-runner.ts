@@ -3,6 +3,7 @@
 // node against dist/src. Running it in the project's own module graph means models
 // defined in migrations share state with this package — engine, connection, registry.
 import pc from 'picocolors';
+import type { Pool } from 'pg';
 import type { DatabaseEngine } from '../types.js';
 import { setDbEngine } from '../db/engine.js';
 import { setDbClient } from '../db/index.js';
@@ -14,16 +15,69 @@ import { configureLogger } from '../logger.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { registeredModels, setAutoSync } from '../db/engine.js';
+import { registeredModels, setAutoSync, setSyncSuppressed, type PlanStep } from '../db/engine.js';
+import { describeStep, planModels, renderMigration } from '../db/generate.js';
+import { pullPostgres } from '../db/pull.js';
+import { writeModels } from '../db/codegen.js';
 
 interface RunnerOptions {
   root: string;
   databaseUrl?: string;
   dryRun?: boolean;
+  exitCode?: boolean;
+  baseline?: boolean;
+  name?: string;
+  verify?: boolean;
+  allowDrop?: boolean;
+  tighten?: boolean;
+  out?: string;
+  force?: boolean;
   steps?: number;
   seed?: string;
   port?: number;
 }
+
+// Every model lives in src/model(s)/ by convention; importing the files registers them.
+async function importModels(root: string) {
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (/\.(ts|js|mts|mjs)$/.test(entry.name) && !entry.name.endsWith('.d.ts'))
+        files.push(p);
+    }
+  };
+  walk(path.join(root, 'model'));
+  walk(path.join(root, 'models'));
+  for (const f of files.sort()) await import(pathToFileURL(f).href);
+  return registeredModels();
+}
+
+/** The same server, a throwaway PostgreSQL schema (via search_path) or MongoDB database. */
+function shadowUrl(url: string, engine: DatabaseEngine, name: string): string {
+  if (engine === 'mongodb')
+    return url.replace(/^(mongodb(?:\+srv)?:\/\/[^/?]+)(\/[^?]*)?/, `$1/${name}`);
+  const u = new URL(url);
+  const prev = u.searchParams.get('options');
+  u.searchParams.set('options', `${prev ? `${prev} ` : ''}-c search_path=${name}`);
+  return u.toString();
+}
+
+// MongoDB: document renames can't be seen in an empty shadow database — leave out the
+// ones a migration file already carries.
+function withoutWrittenRenames(steps: PlanStep[]): PlanStep[] {
+  const dir = path.join(process.cwd(), 'src', 'migrations');
+  if (!steps.some((st) => st.sql.includes('$rename')) || !fs.existsSync(dir)) return steps;
+  const written = fs
+    .readdirSync(dir)
+    .map((f) => fs.readFileSync(path.join(dir, f), 'utf8'))
+    .join('\n');
+  return steps.filter((st) => !(st.sql.includes('$rename') && written.includes(st.sql)));
+}
+
+const migrationStamp = (d = new Date()) => d.toISOString().replace(/\D/g, '').slice(0, 14);
 
 function engineOf(url: string): DatabaseEngine {
   if (url.startsWith('mongodb')) return 'mongodb';
@@ -41,8 +95,7 @@ async function main(): Promise<void> {
     throw new Error('[EFC] DATABASE_URL is not set (add it to .env or pass --database-url)');
   const engine = engineOf(url);
   setDbEngine(engine);
-  const client: unknown =
-    engine === 'mongodb' ? await connectMongo(url) : await connectPostgres(url);
+  let client: unknown = engine === 'mongodb' ? await connectMongo(url) : await connectPostgres(url);
   setDbClient(client as Record<string, unknown>);
 
   const close = async () => {
@@ -56,10 +109,15 @@ async function main(): Promise<void> {
   try {
     switch (command) {
       case 'migrate': {
-        const ran = await new Migrator(migrations, engine, client).migrate({ onRun: step('up  ') });
+        const ran = await new Migrator(migrations, engine, client).migrate({
+          onRun: step(opts.baseline ? 'mark' : 'up  '),
+          ...(opts.baseline && { baseline: true }),
+        });
         console.log(
           ran.length
-            ? pc.green(`\n  Ran ${ran.length} migration(s)\n`)
+            ? pc.green(
+                `\n  ${opts.baseline ? 'Marked' : 'Ran'} ${ran.length} migration(s)${opts.baseline ? ' as applied' : ''}\n`,
+              )
             : pc.green('  Nothing to migrate'),
         );
         break;
@@ -77,22 +135,8 @@ async function main(): Promise<void> {
         break;
       }
       case 'sync': {
-        // Every model lives in src/model(s)/ by convention; importing the files registers them.
-        const files: string[] = [];
-        const walk = (dir: string) => {
-          if (!fs.existsSync(dir)) return;
-          for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            const p = path.join(dir, entry.name);
-            if (entry.isDirectory()) walk(p);
-            else if (/\.(ts|js|mts|mjs)$/.test(entry.name) && !entry.name.endsWith('.d.ts'))
-              files.push(p);
-          }
-        };
-        walk(path.join(opts.root, 'model'));
-        walk(path.join(opts.root, 'models'));
         setAutoSync(false); // report/apply only what this command decides
-        for (const f of files.sort()) await import(pathToFileURL(f).href);
-        const models = registeredModels();
+        const models = await importModels(opts.root);
         if (models.length === 0) {
           console.log(
             pc.yellow(`  No models found in ${path.relative(process.cwd(), opts.root)}/model(s)/`),
@@ -115,6 +159,151 @@ async function main(): Promise<void> {
               ? pc.yellow(`\n  ${total} pending change(s) — run without --dry-run to apply\n`)
               : pc.green(`\n  Applied ${total} change(s)\n`),
         );
+        // CI drift check: 2 = the database differs from the models (1 stays "error").
+        if (opts.dryRun && opts.exitCode && total > 0) process.exitCode = 2;
+        break;
+      }
+      case 'generate': {
+        // Diff the models against the schema the migrations produce — replayed into a
+        // throwaway schema/database — not against the dev database, which autoSync keeps
+        // in step with the models already.
+        const shadow = `efc_shadow_${process.pid}_${Date.now().toString(36)}`;
+        if (engine === 'postgresql') {
+          await (client as { query(s: string): Promise<unknown> }).query(
+            `CREATE SCHEMA "${shadow}"`,
+          );
+        }
+        await close();
+        client =
+          engine === 'mongodb'
+            ? await connectMongo(shadowUrl(url, engine, shadow))
+            : await connectPostgres(shadowUrl(url, engine, shadow));
+        setDbClient(client as Record<string, unknown>);
+        try {
+          setAutoSync(false);
+          const migrator = new Migrator(migrations, engine, client);
+          setSyncSuppressed(true);
+          try {
+            await migrator.migrate();
+          } finally {
+            setSyncSuppressed(false);
+          }
+          const models = await importModels(opts.root);
+          if (models.length === 0) {
+            console.log(
+              pc.yellow(
+                `  No models found in ${path.relative(process.cwd(), opts.root)}/model(s)/`,
+              ),
+            );
+            break;
+          }
+          const planOpts = {
+            ...(opts.allowDrop && { allowDrop: true }),
+            ...(opts.tighten && { tighten: true }),
+          };
+          let steps = await planModels(models, planOpts);
+          steps = withoutWrittenRenames(steps);
+
+          if (opts.name !== undefined) {
+            if (steps.length === 0) {
+              console.log(pc.green('  No changes — the migrations already match the models'));
+            } else {
+              const typescript = fs.existsSync(path.join(process.cwd(), 'tsconfig.json'));
+              const slug =
+                opts.name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'migration';
+              const dir = path.join(process.cwd(), 'src', 'migrations');
+              const file = path.join(
+                dir,
+                `${migrationStamp()}_${slug}.${typescript ? 'ts' : 'js'}`,
+              );
+              fs.mkdirSync(dir, { recursive: true });
+              fs.writeFileSync(
+                file,
+                renderMigration({ engine, typescript, name: opts.name, steps }),
+              );
+              console.log(
+                `\n  ${pc.green('Created')} ${path.relative(process.cwd(), file)} ${pc.dim(`(${steps.length} step(s))`)}\n`,
+              );
+              for (const st of steps) console.log(pc.dim(`    ${describeStep(st).slice(0, 160)}`));
+              console.log(pc.dim('\n  Review it, then run efc db migrate\n'));
+            }
+          } else if (!opts.verify) {
+            for (const st of steps) console.log(`  ${describeStep(st)}`);
+            console.log(
+              steps.length
+                ? pc.yellow(
+                    `\n  ${steps.length} step(s) — pass a name to write them as a migration\n`,
+                  )
+                : pc.green('  No changes — the migrations already match the models'),
+            );
+          }
+
+          if (opts.verify) {
+            // Replay everything (including a migration written just now) and require that
+            // the result matches the models exactly.
+            await migrator.migrate();
+            const left = withoutWrittenRenames(await planModels(models));
+            if (left.length === 0) {
+              console.log(
+                pc.green('  ✓ Verified: the migrations produce exactly the models’ schema'),
+              );
+            } else {
+              console.log(
+                pc.red(
+                  `\n  ✗ The migrations don't match the models — ${left.length} step(s) missing:\n`,
+                ),
+              );
+              for (const st of left) console.log(pc.dim(`    ${describeStep(st).slice(0, 160)}`));
+              console.log(pc.dim('\n  Run efc db generate <name> to write them\n'));
+              process.exitCode = 1;
+            }
+          }
+        } finally {
+          if (engine === 'postgresql') {
+            await (client as { query(s: string): Promise<unknown> })
+              .query(`DROP SCHEMA IF EXISTS "${shadow}" CASCADE`)
+              .catch(() => {});
+          } else {
+            await (client as { dropDatabase(): Promise<unknown> }).dropDatabase().catch(() => {});
+          }
+        }
+        break;
+      }
+      case 'pull': {
+        if (engine !== 'postgresql')
+          throw new Error(
+            '[EFC] efc db pull reads PostgreSQL schemas (MongoDB arrives with defineCollection)',
+          );
+        const { models, skipped: notPulled } = await pullPostgres(client as Pool);
+        if (models.length === 0) {
+          console.log(pc.yellow('  No tables found in the current schema'));
+          break;
+        }
+        const typescript = fs.existsSync(path.join(process.cwd(), 'tsconfig.json'));
+        const dir = path.resolve(process.cwd(), opts.out ?? path.join('src', 'model'));
+        const { written, skipped } = writeModels(dir, models, {
+          typescript,
+          ...(opts.force && { force: true }),
+        });
+        console.log(pc.bold(`\n  Pulled ${models.length} model(s)\n`));
+        for (const f of written)
+          console.log(`  ${pc.green('+')} ${path.relative(process.cwd(), f)}`);
+        for (const f of skipped)
+          console.log(
+            `  ${pc.yellow('•')} ${path.relative(process.cwd(), f)} ${pc.dim('exists — kept (--force overwrites)')}`,
+          );
+        if (notPulled.length)
+          console.log(
+            pc.dim(
+              `\n  Not pulled (no single "id" primary key of type uuid, integer or bigint): ${notPulled.join(', ')}`,
+            ),
+          );
+        const notes = models.reduce((n, m) => n + m.notes.length, 0);
+        if (notes)
+          console.log(
+            pc.dim(`\n  ${notes} note(s) about what couldn't be carried over are in the files`),
+          );
+        console.log();
         break;
       }
       case 'status': {
@@ -166,7 +355,7 @@ async function main(): Promise<void> {
 }
 
 main().then(
-  () => process.exit(0),
+  () => process.exit(process.exitCode ?? 0),
   (err: unknown) => {
     console.error(pc.red(err instanceof Error ? err.message : String(err)));
     // Full stack on request — a failing migration's line number is usually what you need.

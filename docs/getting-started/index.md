@@ -14,32 +14,38 @@
 npx create-efc-app my-api
 ```
 
-The interactive wizard walks through:
+The interactive wizard asks for the **base** app, then offers features:
 
 ```
 ? Project name:            my-api
 ? Language:                TypeScript | JavaScript
 ? Database:                MongoDB | PostgreSQL
 ? Models:                  defineTable | defineModel        (PostgreSQL only)
-? Authentication strategy: http-only | localStorage
-? Features: (space to toggle)
-    ◉ Multi-core clustering
-    ◉ Background tasks
-    ◉ API route documentation
-    ◉ User portal
-    ◉ Admin portal
-    ◉ Role-based access control
-    ◯ Mailer
+? Task queue backend:      pg-boss | BullMQ                 (BullMQ on MongoDB)
+? Multi-core clustering?   Yes
+? Add features now?        (none by default — or add any later with `efc add`)
+    Auth          ◯ Authentication  ◯ Sign in with Google  ◯ Sign in with Apple
+    User portal   ◯ Profile  ◯ Forgot / reset password  ◯ Account security  …
+    Admin portal  ◯ Admin portal  ◯ User management  ◯ Analytics  …
+    Integrations  ◯ Email client
 ```
 
-On **PostgreSQL**, models default to [`defineTable`](../api-reference/table.md): PostgreSQL-native, with real foreign keys between the generated models (a user's sessions, invoices, tickets…), `relations` for `include`, and Prisma-style queries in the generated routes. Pick **defineModel** instead for the portable API. On **MongoDB**, models are `defineModel`, which compiles to mongoose. See [Database](../guides/database.md).
+The base app is the server, `src/api` (with a `/health` route), `src/tasks` (with a `SendEmail` task stub) and the database connection. Everything else is a **feature** from the registry. You can pick features here or add them at any time with [`efc add`](../cli/add.md), which copies the same files in:
 
-Depending on what you toggle on, you'll see follow-up questions:
+```bash
+efc add auth forgot-password admin-users
+```
 
-- **Background tasks** → pick a queue backend: `BullMQ` (Redis — `REDIS_URL` in `.env`) or `pg-boss` (stores jobs in your PostgreSQL, no Redis to run).
-- **Mailer** → pick an email provider: `Gmail` (preconfigured `smtp.gmail.com`, no host/port to type) or `Other (custom SMTP)` (asks for host + port). Either way you're then asked for the sending email address and password. **For Gmail this must be a 16-character App Password, not your normal Gmail password** — the prompt validates the length and rejects anything that isn't 16 characters. See [Mailer](../guides/mailer.md) for the full walkthrough, including how to generate an App Password.
-- **User portal / Admin portal** → scaffold a large set of ready-made models and routes (auth, profile, billing, support tickets, admin dashboard, content management, etc.). See [Generated Portals](../guides/generated-portals.md) for the complete list.
-- **Role-based access control** → generates a `Role` model and swaps every protected route's `middlewares` export to use the `requireAuth('role')` shorthand instead of an inline guard. See [RBAC](../guides/rbac.md).
+On **PostgreSQL**, models default to [`defineTable`](../api-reference/table.md): PostgreSQL-native, with real foreign keys between the feature models (a user's sessions, invoices, tickets…) and Prisma-style queries in the generated routes. Pick **defineModel** instead for the portable API. On **MongoDB**, models are `defineModel`, which compiles to mongoose. See [Database](../guides/database.md).
+
+Depending on what you pick, you'll see follow-up questions:
+
+- **Task queue backend.** `pg-boss` stores jobs in your PostgreSQL, so there's no Redis to run. `BullMQ` uses Redis (`REDIS_URL` in `.env`).
+- **Authentication** (or any feature that needs it) → pick a strategy: `http-only` (cookie) or `localStorage` (Bearer token).
+- **Sign in with Google / Apple** → the OAuth client credentials (Apple: Services ID, Team ID, Key ID and the path to your `.p8` key). See [Sign in with Google & Apple](../guides/oauth.md).
+- **Email client** → pick an email provider: `Gmail` (preconfigured `smtp.gmail.com`, no host or port to type) or `Other (custom SMTP)` (asks for host + port). Either way you're then asked for the sending email address and password. **For Gmail this must be a 16-character App Password, not your normal Gmail password.** The prompt rejects anything that isn't 16 characters. See [Mailer](../guides/mailer.md) for the full walkthrough, including how to generate an App Password.
+
+Protected routes use `requireAuth('role')` (see [RBAC](../guides/rbac.md)). [Generated Portals](../guides/generated-portals.md) lists every route the features add.
 
 After confirmation it:
 
@@ -48,8 +54,9 @@ After confirmation it:
 3. Generates `.env` (gitignored, `JWT_SECRET` pre-filled with `openssl rand -hex 64`, plus `SMTP_*` vars if you enabled the mailer) and `.env.example` (committed, documented placeholders).
 4. Adds `.env` to `.gitignore`.
 5. Writes `package.json` lifecycle scripts (`dev`, `build`, `start`, `test`, `db:migrate`, `db:rollback`, `db:seed`, `db:studio`).
-6. With a User or Admin portal, writes `src/migrations/00000000000000_init` that creates every generated model's table/collection and indexes.
-7. Runs `npm install` with the dependencies for your selections, then installs the `efc` CLI globally.
+6. With features that have models, writes `src/migrations/00000000000000_init`, which creates every model's table/collection and indexes.
+7. Writes `efc.json`: the app's variant, its features, and a hash of each file, which [`efc add`](../cli/add.md) uses later.
+8. Runs `npm install` with the dependencies for your selections, then installs the `efc` CLI globally.
 
 ---
 

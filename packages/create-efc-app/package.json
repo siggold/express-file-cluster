@@ -1,6 +1,6 @@
 {
   "name": "create-efc-app",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Interactive scaffolder for Express File Cluster projects",
   "homepage": "https://efc.prashantadhikari7.com.np/",
   "repository": {

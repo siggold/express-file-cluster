@@ -1,6 +1,6 @@
 # Project Structure
 
-A scaffolded EFC project looks like this:
+A scaffolded EFC project with the `auth` feature looks like this. The base app alone has just `api/health.ts`, `tasks/SendEmail.ts` and the config files:
 
 ```
 my-api/
@@ -10,20 +10,19 @@ my-api/
 │   │   ├── auth/
 │   │   │   ├── login.ts           # POST /auth/login
 │   │   │   ├── logout.ts          # POST /auth/logout
-│   │   │   └── register.ts        # POST /auth/register (if userPortal)
-│   │   └── users/
-│   │       ├── index.ts           # GET /users  •  POST /users
-│   │       └── [id].ts            # GET /users/:id  •  DELETE /users/:id
+│   │   │   ├── me.ts              # GET /auth/me
+│   │   │   └── register.ts        # POST /auth/register
 │   ├── tasks/                     # Background jobs (scanned non-recursively)
 │   │   └── SendEmail.ts           # task name: "SendEmail"
 │   ├── model/                     # Engine-agnostic data models
 │   │   ├── User.ts
-│   │   └── Role.ts                # generated if the RBAC option is enabled
+│   │   └── Admin.ts
 │   ├── migrations/                # efc db migrate — run in filename order
 │   │   └── 00000000000000_init.ts # syncs every generated model
 │   ├── seeds/                     # efc db seed (create with efc generate seed)
 │   └── index.ts                   # Framework entry point
 ├── efc.config.ts                  # Structural configuration
+├── efc.json                       # Variant + installed features, for efc add
 ├── .env                           # Real secrets — gitignored
 ├── .env.example                   # Documented template — safe to commit
 ├── .gitignore
@@ -31,7 +30,7 @@ my-api/
 └── tsconfig.json
 ```
 
-If you enable the **User portal**, **Admin portal**, **RBAC**, or **Mailer** options during scaffolding, `src/model/`, `src/api/`, and `src/tasks/` fill out considerably — see [Generated Portals](../guides/generated-portals.md) for the full list of models and routes, [RBAC](../guides/rbac.md) for the `requireAuth('role')` shorthand, and [Mailer](../guides/mailer.md) for the SMTP setup.
+Each feature you add (at creation or later with [`efc add`](../cli/add.md)) fills out `src/model/`, `src/api/` and `src/tasks/`. See [Generated Portals](../guides/generated-portals.md) for the full list of models and routes, [RBAC](../guides/rbac.md) for the `requireAuth('role')` shorthand, and [Mailer](../guides/mailer.md) for the SMTP setup.
 
 ---
 

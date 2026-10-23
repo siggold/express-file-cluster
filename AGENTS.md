@@ -26,13 +26,14 @@ Before changing or generating any code, read in this order:
 | `ignite()` options, boot order | `docs/api-reference/ignite.md`, `Skills/efc/pre-flight.md` |
 | Models, queries, transactions (MongoDB / PostgreSQL) | `docs/guides/database.md`, `docs/api-reference/db.md` |
 | PostgreSQL-native models (`defineTable`, Prisma-style) | `docs/api-reference/table.md` |
-| Migrations, seeds, `efc db` | `docs/guides/migrations.md`, `docs/cli/db.md` |
+| Migrations (incl. `efc db generate`, `pull`), seeds, `efc db` | `docs/guides/migrations.md`, `docs/cli/db.md` |
+| Coming from Prisma, `efc import-prisma` | `docs/guides/coming-from-prisma.md` |
 | Auth, roles, sessions | `docs/guides/authentication.md`, `docs/api-reference/auth.md`, `docs/guides/rbac.md`, `Skills/efc/auth-internals.md` |
 | Background tasks, cron, dead letters | `docs/core-concepts/background-tasks.md`, `docs/api-reference/tasks.md`, `Skills/efc/tasks-internals.md` |
 | Cache, logging, errors | `docs/guides/caching.md`, `docs/guides/logging.md`, `docs/guides/error-handling.md` |
 | Clustering, deployment, env vars | `docs/core-concepts/clustering.md`, `docs/guides/deployment.md`, `docs/guides/environment-variables.md` |
 | The CLI (`efc …`) | `docs/cli/index.md` and the page per command |
-| The scaffolder (`create-efc-app`) | `docs/getting-started/index.md`, `docs/guides/generated-portals.md` |
+| The scaffolder (`create-efc-app`), `efc add` registry | `docs/getting-started/index.md`, `docs/cli/add.md`, `docs/guides/generated-portals.md` |
 
 Search when unsure: `grep -rn "<term>" docs Skills/efc`.
 

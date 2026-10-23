@@ -541,6 +541,8 @@ export function pgModel<T extends object>(
 
     sync: (opts?: { dryRun?: boolean }) => tbl.reconcile(opts?.dryRun ?? false),
 
+    plan: (opts) => tbl.plan(opts),
+
     drop: () => tbl.drop(),
   };
 }

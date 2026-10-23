@@ -124,8 +124,14 @@ export class Migrator {
     return [...all].sort().map((name) => applied.get(name) ?? { name });
   }
 
-  /** Runs every pending migration in one new batch; returns their names. */
-  async migrate(opts: { onRun?: (name: string) => void } = {}): Promise<string[]> {
+  /**
+   * Runs every pending migration in one new batch; returns their names. `baseline` records
+   * them as applied without running them — for a database whose schema already matches
+   * (created by autoSync before the app had migrations).
+   */
+  async migrate(
+    opts: { onRun?: (name: string) => void; baseline?: boolean } = {},
+  ): Promise<string[]> {
     return this.store.withLock(async () => {
       const applied = await this.store.applied();
       const done = new Set(applied.map((m) => m.name));
@@ -138,7 +144,7 @@ export class Migrator {
         if (typeof mod.up !== 'function')
           throw new Error(`[EFC] Migration ${file} has no exported up()`);
         opts.onRun?.(name);
-        await mod.up(this.ctx);
+        if (!opts.baseline) await mod.up(this.ctx);
         await this.store.record(name, batch);
         ran.push(name);
       }

@@ -74,6 +74,33 @@ export interface ScaffoldOptions {
    * `defineModel`.
    */
   modelApi?: 'defineTable' | 'defineModel';
+  /**
+   * Registry mode (`efc add`): every file renders the same way whatever else is generated,
+   * so a feature's files can be added to an app on their own. Login and the password flows
+   * always handle both User and Admin (and both models come with auth), routes always send
+   * mail through the SendEmail task, and models declare no back-relations.
+   */
+  registry?: boolean;
+  /** OAuth sign-in providers (needs the User model — auth). */
+  oauth?: { google?: boolean; apple?: boolean };
+}
+
+/** Whether any OAuth sign-in provider is generated. */
+function usesOAuth(opts: ScaffoldOptions): boolean {
+  return !!(opts.oauth?.google || opts.oauth?.apple);
+}
+
+/** Which principals the auth routes handle. */
+function principals(opts: ScaffoldOptions): { user: boolean; admin: boolean } {
+  return {
+    user: !!opts.registry || opts.userPortal,
+    admin: !!opts.registry || opts.adminPortal,
+  };
+}
+
+/** Whether routes email their tokens through the SendEmail task (vs. a TODO). */
+function sendsMail(opts: ScaffoldOptions): boolean {
+  return !!opts.registry || opts.mailer;
 }
 
 /** Whether the generated models are `defineTable` (PostgreSQL-native) ones. */
@@ -120,15 +147,20 @@ export function generatedModels(opts: ScaffoldOptions): Set<string> {
   // no separate self-service user portal, so the model must exist for it too.
   if (user || (admin && af.userManagement)) m.add('User');
   if (admin) m.add('Admin');
+  // Registry mode: auth always handles both principals, so it always brings both models.
+  if (opts.registry && (user || admin)) m.add('User').add('Admin');
   if (user && uf.accountSecurity) m.add('Session');
   if ((user && uf.notifications) || (admin && af.notificationsAndLogs)) m.add('Notification');
   if (user && uf.filesAndMedia) m.add('File');
   if ((user && uf.support) || (admin && af.supportManagement)) m.add('SupportTicket');
   if (admin && af.notificationsAndLogs) m.add('AuditLog');
   if (user && uf.apiAndBilling) m.add('Subscription').add('Invoice').add('ApiKey');
+  if (usesOAuth(opts)) m.add('OAuthAccount');
   if (admin && af.billingManagement) m.add('Plan').add('Coupon');
   if (opts.rbac && admin && af.adminManagement) m.add('Role');
   if (admin && af.contentManagement) m.add('FAQ').add('Blog').add('Category');
+  // Registry mode: a reference is always a foreign key, so its target comes along.
+  if (opts.registry && m.has('Subscription')) m.add('Plan');
   return m;
 }
 
@@ -162,7 +194,7 @@ function relationsOption(
   opts: ScaffoldOptions,
   rels: { name: string; kind: 'hasMany' | 'hasOne'; target: string; foreignKey: string }[],
 ): string {
-  if (!usesTables(opts)) return '';
+  if (!usesTables(opts) || opts.registry) return '';
   const models = generatedModels(opts);
   const live = rels.filter((r) => models.has(r.target));
   if (live.length === 0) return '';
@@ -189,7 +221,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<void> {
   await writeExampleRoute(dest, opts);
   if (models.has('User')) await writeUserModel(dest, opts);
   if (models.has('Admin')) await writeAdminModel(dest, opts);
-  await writeAuthRoutes(dest, opts);
+  if (!opts.registry || opts.userPortal || opts.adminPortal) await writeAuthRoutes(dest, opts);
   if (opts.adminPortal) await writeAdminRoutes(dest, opts);
   if (opts.userPortal && uf.profileViewing) await writeUserRoutes(dest, opts);
   if (opts.tasks) await writeExampleTask(dest, opts);
@@ -211,6 +243,8 @@ export async function scaffold(opts: ScaffoldOptions): Promise<void> {
     ['Coupon', writeCouponModel],
   ];
   for (const [name, write] of extended) if (models.has(name)) await write(dest, opts);
+  if (models.has('OAuthAccount')) await writeOAuthAccountModel(dest, opts);
+  if (usesOAuth(opts)) await writeOAuth(dest, opts);
   if (usesTables(opts)) await writeModelIndex(dest, opts);
   // Extended routes — gated by the same per-feature flags as their models
   if (opts.userPortal) await writeAuthExtendedRoutes(dest, opts);
@@ -223,7 +257,7 @@ export async function scaffold(opts: ScaffoldOptions): Promise<void> {
 
 async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<void> {
   const deps: Record<string, string> = {
-    'express-file-cluster': '^0.7.1',
+    'express-file-cluster': '^0.8.0',
   };
   if (opts.database === 'mongodb') deps['mongoose'] = '^9.7.2';
   if (opts.database === 'postgresql') {
@@ -233,7 +267,10 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
   if (opts.tasks && opts.taskBackend === 'bullmq') deps['bullmq'] = '^5.0.0';
   if (opts.tasks && opts.taskBackend === 'pg-boss') deps['pg-boss'] = '^12.0.0';
   if (opts.mailer) deps['nodemailer'] = '^6.9.0';
-  deps['bcrypt'] = '^5.1.0';
+  if (usesOAuth(opts)) deps['jose'] = '^6.2.3';
+  // Registry mode: the base has no auth, so no password hashing either.
+  const auth = !opts.registry || opts.userPortal || opts.adminPortal;
+  if (auth) deps['bcrypt'] = '^5.1.0';
 
   const devDeps: Record<string, string> = {
     vitest: '^5.0.3',
@@ -246,7 +283,7 @@ async function writePackageJson(dest: string, opts: ScaffoldOptions): Promise<vo
     devDeps['@types/express'] = '^4.17.21';
     devDeps['tsx'] = '^4.0.0';
     if (opts.mailer) devDeps['@types/nodemailer'] = '^6.4.0';
-    devDeps['@types/bcrypt'] = '^5.0.0';
+    if (auth) devDeps['@types/bcrypt'] = '^5.0.0';
     if (opts.database === 'postgresql') devDeps['@types/pg'] = '^8.11.0';
   }
 
@@ -403,14 +440,21 @@ ${
   usesTables(opts)
     ? `- \`src/model/*.${ext}\` — \`defineTable\` models (PostgreSQL-native, Prisma-style queries:
   \`findMany({ where, include })\`, \`create({ data })\`, \`update({ where, data })\`). A \`ref\` is a
-  foreign key; back-relations are in each model's \`relations\`. \`src/model/index.${ext}\` imports
+  foreign key; ${opts.registry ? "add back-relations to a model's `relations` when you need `include`" : "back-relations are in each model's `relations`"}. \`src/model/index.${ext}\` imports
   them all${opts.language === 'typescript' ? ' and declares `Tables` (typed `include`)' : ''} — add new models there.`
     : `- \`src/model/*.${ext}\` — \`defineModel\` models.`
 }
 - \`src/index.${ext}\` is the entry point; it imports \`efc.config.${ext}\` and passes it to \`ignite()\`.
 - Only three import paths exist: \`express-file-cluster\`, \`express-file-cluster/auth\`,
   \`express-file-cluster/tasks\`.
-
+${
+  opts.registry
+    ? `- Ready-made features (auth, user/admin portals, billing, mailer…) come from the registry:
+  \`npx efc list\`, then \`npx efc add <item> --yes\` — check it before hand-writing auth or CRUD
+  (\`${D}/cli/add.md\`). \`efc.json\` tracks what was added; commit it.
+`
+    : ''
+}
 ## Commands
 
 \`\`\`bash
@@ -451,8 +495,44 @@ async function writeEnvFiles(dest: string, opts: ScaffoldOptions): Promise<void>
   // Only BullMQ needs Redis — and `efc tasks failed` picks its backend from REDIS_URL.
   const redis =
     opts.tasks && opts.taskBackend !== 'pg-boss' ? '\nREDIS_URL=redis://localhost:6379' : '';
-  const dotenv = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbUrl}\nJWT_SECRET=${secret}${redis}\nCORS_ORIGINS=http://localhost:3000${smtpVars}`;
-  const example = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbExampleUrl}\nJWT_SECRET=<generate with: openssl rand -hex 64>${redis}\nCORS_ORIGINS=http://localhost:3000,https://yourapp.com${smtpExample}`;
+  const oauth = opts.oauth ?? {};
+  const oauthVars = [
+    ...(oauth.google
+      ? [
+          ['GOOGLE_CLIENT_ID', '', 'your-client-id.apps.googleusercontent.com'],
+          ['GOOGLE_CLIENT_SECRET', '', 'your-client-secret'],
+          [
+            'GOOGLE_REDIRECT_URI',
+            'http://localhost:3000/v1/api/auth/google/callback',
+            'https://api.yourapp.com/v1/api/auth/google/callback',
+          ],
+        ]
+      : []),
+    ...(oauth.apple
+      ? [
+          ['APPLE_CLIENT_ID', '', 'com.yourapp.signin'],
+          ['APPLE_TEAM_ID', '', 'ABCDE12345'],
+          ['APPLE_KEY_ID', '', 'FGHIJ67890'],
+          [
+            'APPLE_PRIVATE_KEY',
+            '',
+            '-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----',
+          ],
+          [
+            'APPLE_REDIRECT_URI',
+            'https://api.yourapp.com/v1/api/auth/apple/callback',
+            'https://api.yourapp.com/v1/api/auth/apple/callback',
+          ],
+        ]
+      : []),
+    ...(usesOAuth(opts)
+      ? [['OAUTH_SUCCESS_REDIRECT', 'http://localhost:3000/', 'https://yourapp.com/']]
+      : []),
+  ];
+  const oauthEnv = oauthVars.map(([k, v]) => `\n${k}=${v}`).join('');
+  const oauthExample = oauthVars.map(([k, , ex]) => `\n${k}=${ex}`).join('');
+  const dotenv = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbUrl}\nJWT_SECRET=${secret}${redis}\nCORS_ORIGINS=http://localhost:3000${smtpVars}${oauthEnv}`;
+  const example = `PORT=3000\nNODE_ENV=development\nDATABASE_URL=${dbExampleUrl}\nJWT_SECRET=<generate with: openssl rand -hex 64>${redis}\nCORS_ORIGINS=http://localhost:3000,https://yourapp.com${smtpExample}${oauthExample}`;
   await fs.outputFile(path.join(dest, '.env'), dotenv);
   await fs.outputFile(path.join(dest, '.env.example'), example);
 }
@@ -631,8 +711,7 @@ async function writeAuthRoutes(dest: string, opts: ScaffoldOptions): Promise<voi
 
   // Only reference the models for the portals actually being generated —
   // referencing both unconditionally broke builds when only one portal was selected.
-  const hasUser = opts.userPortal;
-  const hasAdmin = opts.adminPortal;
+  const { user: hasUser, admin: hasAdmin } = principals(opts);
   const hasModels = hasUser || hasAdmin;
 
   const loginDbImports = hasModels
@@ -775,7 +854,7 @@ ${logoutMeta}export const POST = async (req, res) => {
   await fs.outputFile(path.join(dest, 'src', 'api', 'auth', `login.${ext}`), loginContent);
   await fs.outputFile(path.join(dest, 'src', 'api', 'auth', `logout.${ext}`), logoutContent);
 
-  if (!opts.userPortal) return;
+  if (!hasUser) return;
 
   const registerMeta = opts.routeDocs
     ? ts
@@ -783,9 +862,9 @@ ${logoutMeta}export const POST = async (req, res) => {
       : `export const meta = {\n  POST: {\n    description: 'Register a new user account.',\n    request: { body: { name: 'Jane Doe', email: 'jane@example.com', password: 'secret' } },\n    response: { status: 201, body: { message: 'Account created successfully' } },\n  },\n};\n\n`
     : '';
 
-  const registerDbImports = `import bcrypt from 'bcrypt';\nimport crypto from 'node:crypto';\n${opts.mailer ? "import { enqueue } from 'express-file-cluster/tasks';\n" : ''}import { User } from '../../model/User.js';\n`;
+  const registerDbImports = `import bcrypt from 'bcrypt';\nimport crypto from 'node:crypto';\n${sendsMail(opts) ? "import { enqueue } from 'express-file-cluster/tasks';\n" : ''}import { User } from '../../model/User.js';\n`;
 
-  const sendVerifyEmail = opts.mailer
+  const sendVerifyEmail = sendsMail(opts)
     ? `
   var appUrl = process.env.APP_URL || 'http://localhost:3000';
   await enqueue('SendEmail', {
@@ -876,8 +955,9 @@ async function writeAdminRoutes(dest: string, opts: ScaffoldOptions): Promise<vo
       : `export const meta = {\n  GET: {\n    description: 'Admin dashboard stats. Requires admin role.',\n    response: { status: 200, body: { stats: { totalUsers: 120, activeUsers: 98, verifiedUsers: 84 } } },\n  },\n};\n\n`
     : '';
 
-  // Real stats need the User model, which only exists when userManagement is on.
-  const dashboardHasUserModel = opts.adminFeatures.userManagement;
+  // Real stats need the User model, which only exists when userManagement is on (registry
+  // mode: always — auth brings it).
+  const dashboardHasUserModel = !!opts.registry || opts.adminFeatures.userManagement;
 
   const dashboardDbImport = dashboardHasUserModel
     ? `import { User } from '../../model/User.js';\n`
@@ -1390,9 +1470,9 @@ async function writeAuthExtendedRoutes(dest: string, opts: ScaffoldOptions): Pro
     : `export const middlewares = [requireAuth];\n`;
   const mwUser3 = mwUser2;
   const RA = `import { requireAuth } from 'express-file-cluster/auth';\n`;
-  const hasAdmin = opts.adminPortal;
+  const hasAdmin = principals(opts).admin;
   const uf = opts.userFeatures;
-  const sendResetEmail = opts.mailer
+  const sendResetEmail = sendsMail(opts)
     ? `    var appUrl = process.env.APP_URL || 'http://localhost:3000';
     await enqueue('SendEmail', {
       to: email,
@@ -1402,7 +1482,7 @@ async function writeAuthExtendedRoutes(dest: string, opts: ScaffoldOptions): Pro
 `
     : `    // TODO: email this token to the user — enable the Mailer feature to auto-wire SendEmail
 `;
-  const sendVerifyEmailResend = opts.mailer
+  const sendVerifyEmailResend = sendsMail(opts)
     ? `    var appUrl = process.env.APP_URL || 'http://localhost:3000';
     await enqueue('SendEmail', {
       to: email,
@@ -1412,7 +1492,7 @@ async function writeAuthExtendedRoutes(dest: string, opts: ScaffoldOptions): Pro
 `
     : `    // TODO: email this token to the user — enable the Mailer feature to auto-wire SendEmail
 `;
-  const mailerTaskImport = opts.mailer
+  const mailerTaskImport = sendsMail(opts)
     ? `import { enqueue } from 'express-file-cluster/tasks';\n`
     : '';
 
@@ -3879,6 +3959,7 @@ const MODEL_ORDER = [
   'Role',
   'FAQ',
   'Coupon',
+  'OAuthAccount',
   'Session',
   'Notification',
   'File',
@@ -3921,4 +4002,340 @@ export async function down${sig} {
 }
 `;
   await fs.outputFile(path.join(dest, 'src', 'migrations', `00000000000000_init.${ext}`), content);
+}
+
+// ── OAuth sign-in (auth@google, auth@apple) ──────────────────────────────────────────────
+// Each provider gets a redirect route and a callback route; both share src/lib/oauth (state
+// cookie, find-or-create the user, sign in) and the OAuthAccount model, which links a
+// provider identity to a User — so signing in with a provider never changes User itself.
+
+async function writeOAuthAccountModel(dest: string, opts: ScaffoldOptions): Promise<void> {
+  const ext = opts.language === 'typescript' ? 'ts' : 'js';
+  const content = `${modelApi(opts).import}
+
+// One row per provider identity ("google:<sub>"), linked to the User it signs in as.
+export const OAuthAccount = ${modelApi(opts).name}('OAuthAccount', {
+  key:        { type: 'string', required: true, unique: true },
+  provider:   { type: 'string', required: true, enum: ['google', 'apple'] },
+  providerId: { type: 'string', required: true },
+  email:      { type: 'string' },
+${refField(opts, { field: 'user', target: 'User', legacy: `  userId:     { type: 'string', required: true },`, required: true, onDelete: 'cascade' })}
+});
+`;
+  await fs.outputFile(path.join(dest, 'src', 'model', `OAuthAccount.${ext}`), content);
+}
+
+async function writeOAuth(dest: string, opts: ScaffoldOptions): Promise<void> {
+  const ts = opts.language === 'typescript';
+  const ext = ts ? 'ts' : 'js';
+  const db = orm(opts);
+  const T = (s: string) => (ts ? s : '');
+  // defineTable: a real foreign key `user`; defineModel: the plain `userId` string.
+  const userField = usesTables(opts) && generatedModels(opts).has('User') ? 'user' : 'userId';
+
+  const lib = `import crypto from 'node:crypto';
+import bcrypt from 'bcrypt';
+import { HttpError } from 'express-file-cluster';
+import { issueToken } from 'express-file-cluster/auth';
+${T("import type { Request, Response } from 'express';\n")}import { User } from '../model/User.js';
+import { OAuthAccount } from '../model/OAuthAccount.js';
+
+// Shared by the OAuth sign-in routes (src/api/auth/<provider>/).
+
+const STATE_TTL_MS = 10 * 60 * 1000; // a sign-in attempt has 10 minutes to come back
+${T(`
+export interface OAuthState {
+  state: string;
+  nonce: string;
+  verifier?: string;
+}
+
+export interface OAuthProfile {
+  provider: 'google' | 'apple';
+  providerId: string;
+  email?: string;
+  emailVerified: boolean;
+  name?: string;
+}
+`)}
+/** A random URL-safe string (state, nonce, PKCE verifier). */
+export function randomToken()${T(': string')} {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+/** The PKCE S256 challenge for a verifier. */
+export function pkceChallenge(verifier${T(': string')})${T(': string')} {
+  return crypto.createHash('sha256').update(verifier).digest('base64url');
+}
+
+/**
+ * Remembers a sign-in attempt in a short-lived cookie until the provider redirects back.
+ * \`crossSite\`: the provider POSTs the callback from its own site (Apple), so the cookie must
+ * be SameSite=None — which browsers only accept with Secure (https, or localhost).
+ */
+export function rememberState(
+  res${T(': Response')},
+  provider${T(': string')},
+  data${T(': OAuthState')},
+  crossSite = false,
+)${T(': void')} {
+  res.cookie(\`efc_oauth_\${provider}\`, JSON.stringify(data), {
+    httpOnly: true,
+    secure: crossSite || process.env.NODE_ENV === 'production',
+    sameSite: crossSite ? 'none' : 'lax',
+    maxAge: STATE_TTL_MS,
+    path: '/',
+  });
+}
+
+/** The remembered attempt (cleared) — or undefined if \`state\` doesn't match it. */
+export function takeState(
+  req${T(': Request')},
+  res${T(': Response')},
+  provider${T(': string')},
+  state${T(': unknown')},
+)${T(': OAuthState | undefined')} {
+  const name = \`efc_oauth_\${provider}\`;
+  const raw = ${ts ? '(req as Request & { cookies?: Record<string, string> }).cookies?.[name]' : 'req.cookies?.[name]'};
+  res.clearCookie(name, { path: '/' });
+  if (!raw || typeof state !== 'string') return undefined;
+  try {
+    const saved = JSON.parse(raw)${T(' as OAuthState')};
+    const a = Buffer.from(String(saved.state));
+    const b = Buffer.from(state);
+    return a.length === b.length && crypto.timingSafeEqual(a, b) ? saved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Signs in the user behind a provider identity: the account already linked to it, else the
+ * user with the same (provider-verified) email, else a new user. New users get a random
+ * password — they can set a real one with the forgot-password flow.
+ */
+export async function signInWithOAuth(res${T(': Response')}, profile${T(': OAuthProfile')})${T(': Promise<void>')} {
+  const key = \`\${profile.provider}:\${profile.providerId}\`;
+  const account = await ${db.findOne('OAuthAccount', '{ key }')};
+  let user = account ? await ${db.findById('User', `account.${userField}`)} : null;
+  if (!user) {
+    if (!profile.email || !profile.emailVerified) {
+      throw new HttpError(400, \`\${profile.provider} did not return a verified email address\`);
+    }
+    const email = profile.email;
+    user =
+      (await ${db.findOne('User', '{ email }')}) ??
+      (await ${db.create(
+        'User',
+        `{
+        name: profile.name || email.split('@')[0],
+        email,
+        password: await bcrypt.hash(randomToken(), 10),
+        isVerified: true,
+      }`,
+      )});
+    if (account) await ${db.update('OAuthAccount', 'account.id', `{ ${userField}: user.id }`)};
+    else {
+      await ${db.create(
+        'OAuthAccount',
+        `{
+        key,
+        provider: profile.provider,
+        providerId: profile.providerId,
+        email,
+        ${userField}: user.id,
+      }`,
+      )};
+    }
+  }
+  if (!user.isActive) throw new HttpError(403, 'Account suspended');
+  await issueToken(res, { id: user.id, role: user.role, email: user.email });
+}
+
+/** Where the browser goes once signed in. */
+export function successRedirect()${T(': string')} {
+  return process.env.OAUTH_SUCCESS_REDIRECT || '/';
+}
+`;
+
+  const reqRes = (r: string) => (ts ? `(${r}: Request, res: Response)` : `(${r}, res)`);
+  const typeImport = T("import type { Request, Response } from 'express';\n");
+
+  const meta = (method: string, description: string) =>
+    `${ts ? "import type { RouteMeta } from 'express-file-cluster';\n\n" : ''}export const meta${T(': RouteMeta')} = {\n  ${method}: { description: '${description}' },\n};\n\n`;
+
+  const googleStart = `${typeImport}import { pkceChallenge, randomToken, rememberState } from '../../../lib/oauth.js';
+${meta('GET', 'Start "Sign in with Google": redirects to Google.')}// Redirects to Google's consent screen; Google sends the browser back to the callback route
+// (GOOGLE_REDIRECT_URI — register that exact URL in the Google Cloud console).
+export const GET = async ${reqRes('_req')} => {
+  const state = randomToken();
+  const nonce = randomToken();
+  const verifier = randomToken();
+  rememberState(res, 'google', { state, nonce, verifier });
+  const params = new URLSearchParams({
+    client_id: process.env.GOOGLE_CLIENT_ID ?? '',
+    redirect_uri: process.env.GOOGLE_REDIRECT_URI ?? '',
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    nonce,
+    code_challenge: pkceChallenge(verifier),
+    code_challenge_method: 'S256',
+    prompt: 'select_account',
+  });
+  res.redirect(\`https://accounts.google.com/o/oauth2/v2/auth?\${params}\`);
+};
+`;
+
+  const googleCallback = `import { HttpError } from 'express-file-cluster';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+${typeImport}import { signInWithOAuth, successRedirect, takeState } from '../../../lib/oauth.js';
+${meta('GET', 'Google redirects here after sign-in; signs the user in and redirects to OAUTH_SUCCESS_REDIRECT.')}const GOOGLE_KEYS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
+
+export const GET = async ${reqRes('req')} => {
+  const { code, state, error } = req.query;
+  if (error) throw new HttpError(400, \`Google sign-in failed: \${String(error)}\`);
+  const saved = takeState(req, res, 'google', state);
+  if (!saved || typeof code !== 'string') {
+    throw new HttpError(400, 'Sign-in attempt expired or invalid — start again');
+  }
+
+  const tokens = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env.GOOGLE_CLIENT_ID ?? '',
+      client_secret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+      redirect_uri: process.env.GOOGLE_REDIRECT_URI ?? '',
+      grant_type: 'authorization_code',
+      code_verifier: saved.verifier ?? '',
+    }),
+  });
+  if (!tokens.ok) throw new HttpError(502, \`Google rejected the sign-in (\${tokens.status})\`);
+  const { id_token } = (await tokens.json())${T(' as { id_token: string }')};
+
+  const { payload } = await jwtVerify(id_token, GOOGLE_KEYS, {
+    issuer: ['https://accounts.google.com', 'accounts.google.com'],
+    audience: process.env.GOOGLE_CLIENT_ID ?? '',
+  });
+  if (payload.nonce !== saved.nonce) throw new HttpError(400, 'Invalid sign-in response');
+
+  await signInWithOAuth(res, {
+    provider: 'google',
+    providerId: String(payload.sub),
+    email: ${ts ? 'payload.email as string | undefined' : 'payload.email'},
+    emailVerified: payload.email_verified === true,
+    name: ${ts ? 'payload.name as string | undefined' : 'payload.name'},
+  });
+  res.redirect(successRedirect());
+};
+`;
+
+  const appleStart = `${typeImport}import { randomToken, rememberState } from '../../../lib/oauth.js';
+${meta('GET', 'Start "Sign in with Apple": redirects to Apple.')}// Redirects to Apple; Apple POSTs the result to the callback route (APPLE_REDIRECT_URI —
+// register it on the Services ID; Apple only accepts https URLs on a verified domain).
+export const GET = async ${reqRes('_req')} => {
+  const state = randomToken();
+  const nonce = randomToken();
+  rememberState(res, 'apple', { state, nonce }, true);
+  const params = new URLSearchParams({
+    client_id: process.env.APPLE_CLIENT_ID ?? '',
+    redirect_uri: process.env.APPLE_REDIRECT_URI ?? '',
+    response_type: 'code',
+    response_mode: 'form_post',
+    scope: 'name email',
+    state,
+    nonce,
+  });
+  res.redirect(\`https://appleid.apple.com/auth/authorize?\${params}\`);
+};
+`;
+
+  const appleCallback = `import { HttpError } from 'express-file-cluster';
+import { SignJWT, createRemoteJWKSet, importPKCS8, jwtVerify } from 'jose';
+${typeImport}import { signInWithOAuth, successRedirect, takeState } from '../../../lib/oauth.js';
+${meta('POST', 'Apple posts here after sign-in; signs the user in and redirects to OAUTH_SUCCESS_REDIRECT.')}const APPLE_KEYS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
+
+// Apple's client secret is a short-lived ES256 JWT signed with your Sign in with Apple key
+// (APPLE_PRIVATE_KEY: the .p8 file's contents, newlines written as \\n).
+async function clientSecret()${T(': Promise<string>')} {
+  const key = await importPKCS8((process.env.APPLE_PRIVATE_KEY ?? '').replace(/\\\\n/g, '\\n'), 'ES256');
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: process.env.APPLE_KEY_ID ?? '' })
+    .setIssuer(process.env.APPLE_TEAM_ID ?? '')
+    .setSubject(process.env.APPLE_CLIENT_ID ?? '')
+    .setAudience('https://appleid.apple.com')
+    .setIssuedAt()
+    .setExpirationTime('5m')
+    .sign(key);
+}
+
+export const POST = async ${reqRes('req')} => {
+  const { code, state, user, error } = req.body ?? {};
+  if (error) throw new HttpError(400, \`Apple sign-in failed: \${String(error)}\`);
+  const saved = takeState(req, res, 'apple', state);
+  if (!saved || typeof code !== 'string') {
+    throw new HttpError(400, 'Sign-in attempt expired or invalid — start again');
+  }
+
+  const tokens = await fetch('https://appleid.apple.com/auth/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: process.env.APPLE_CLIENT_ID ?? '',
+      client_secret: await clientSecret(),
+      redirect_uri: process.env.APPLE_REDIRECT_URI ?? '',
+      grant_type: 'authorization_code',
+    }),
+  });
+  if (!tokens.ok) throw new HttpError(502, \`Apple rejected the sign-in (\${tokens.status})\`);
+  const { id_token } = (await tokens.json())${T(' as { id_token: string }')};
+
+  const { payload } = await jwtVerify(id_token, APPLE_KEYS, {
+    issuer: 'https://appleid.apple.com',
+    audience: process.env.APPLE_CLIENT_ID ?? '',
+  });
+  if (payload.nonce !== saved.nonce) throw new HttpError(400, 'Invalid sign-in response');
+
+  // Apple sends the user's name once, on their first sign-in, as a JSON form field.
+  let name${T(': string | undefined')};
+  try {
+    const n = typeof user === 'string' ? JSON.parse(user).name : undefined;
+    name = [n?.firstName, n?.lastName].filter(Boolean).join(' ') || undefined;
+  } catch {
+    name = undefined;
+  }
+
+  await signInWithOAuth(res, {
+    provider: 'apple',
+    providerId: String(payload.sub),
+    email: ${ts ? 'payload.email as string | undefined' : 'payload.email'},
+    emailVerified: payload.email_verified === true || payload.email_verified === 'true',
+    name,
+  });
+  res.redirect(303, successRedirect());
+};
+`;
+
+  const oauth = opts.oauth ?? {};
+  await fs.outputFile(path.join(dest, 'src', 'lib', `oauth.${ext}`), lib);
+  if (oauth.google) {
+    await fs.outputFile(
+      path.join(dest, 'src', 'api', 'auth', 'google', `index.${ext}`),
+      googleStart,
+    );
+    await fs.outputFile(
+      path.join(dest, 'src', 'api', 'auth', 'google', `callback.${ext}`),
+      googleCallback,
+    );
+  }
+  if (oauth.apple) {
+    await fs.outputFile(path.join(dest, 'src', 'api', 'auth', 'apple', `index.${ext}`), appleStart);
+    await fs.outputFile(
+      path.join(dest, 'src', 'api', 'auth', 'apple', `callback.${ext}`),
+      appleCallback,
+    );
+  }
 }

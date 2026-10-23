@@ -25,10 +25,50 @@ export function isAutoSync(): boolean {
   return autoSync;
 }
 
+// Set while `efc db generate` replays migrations into its shadow schema: a migration that
+// calls `Model.sync()` (the scaffolded init migration does) mirrors the models as they are
+// *now*, which would hide every change from the diff — so those calls do nothing there.
+let syncSuppressed = false;
+
+export function setSyncSuppressed(value: boolean): void {
+  syncSuppressed = value;
+}
+
+export function isSyncSuppressed(): boolean {
+  return syncSuppressed;
+}
+
+/** One step of a generated migration. */
+export interface PlanStep {
+  /**
+   * PostgreSQL: a SQL statement. MongoDB: a JavaScript statement run against `db` (the
+   * mongoose Connection). With `check`, a query returning `n` that must be 0.
+   */
+  sql: string;
+  /** Best-effort reverse, for the migration's `down()`; `''` = nothing to undo. */
+  down?: string;
+  /** PostgreSQL: skip `sql` when this query returns a row (already applied). */
+  skipIf?: string;
+  /** `sql` counts offending rows: the migration stops with this message (`%n` = count). */
+  check?: string;
+  /** Foreign keys run after every table exists. */
+  phase: 'main' | 'fk';
+}
+
+/** The explicit, possibly lossy extras `efc db generate` may add to the sync plan. */
+export interface PlanOptions {
+  /** Drop columns the model no longer declares. */
+  allowDrop?: boolean;
+  /** Add NOT NULL for required fields and validate enum checks, behind row checks. */
+  tighten?: boolean;
+}
+
 /** What every model API (defineModel, defineTable) registers about itself. */
 export interface RegisteredModel {
   readonly name: string;
   sync(options?: { dryRun?: boolean }): Promise<string[]>;
+  /** The migration steps that would bring the database in line with the model. */
+  plan?(options?: PlanOptions): Promise<PlanStep[]>;
   drop(): Promise<void>;
   /** Records by id — what `populate` needs from a `ref` target. */
   findByIds(ids: unknown[]): Promise<Record<string, unknown>[]>;

@@ -289,6 +289,12 @@ export interface FieldDefinition {
    * real `SEQUENCE`. Only supported on top-level fields.
    */
   sequence?: boolean | string;
+  /**
+   * The field's previous name (top-level fields only). PostgreSQL: sync renames the old
+   * column instead of adding an empty one. MongoDB: `efc db generate` writes a migration
+   * that `$rename`s the field in stored documents.
+   */
+  renamedFrom?: string;
 }
 
 /**

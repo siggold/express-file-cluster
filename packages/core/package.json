@@ -1,6 +1,6 @@
 {
   "name": "express-file-cluster",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Enterprise-grade, zero-boilerplate backend framework with file-based routing and multi-core clustering",
   "homepage": "https://efc.prashantadhikari7.com.np/",
   "repository": {
@@ -40,7 +40,7 @@
     }
   },
   "scripts": {
-    "build": "tsup && node ../../scripts/bundle-docs.mjs dist",
+    "build": "tsup && node ../../scripts/bundle-docs.mjs dist && node ../../scripts/bundle-registry.mjs dist",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit"
   },

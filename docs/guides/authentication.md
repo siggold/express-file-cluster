@@ -2,6 +2,8 @@
 
 EFC ships a complete JWT authentication system. Choose between two delivery strategies depending on your frontend architecture.
 
+> Ready-made routes: `efc add auth` (register / login / logout / me) and `efc add auth@google` / `auth@apple` ([Sign in with Google & Apple](./oauth.md)). See [efc add](../cli/add.md).
+
 ---
 
 ## Choosing a strategy
@@ -169,7 +171,7 @@ JWT_EXPIRES_IN=7d    # default
 JWT_EXPIRES_IN=30d
 ```
 
-There is currently no refresh-token mechanism built into the framework itself. For long-lived sessions with short-lived tokens, implement a `/auth/refresh` route that issues a new token using the existing one as a credential — if you enabled **User portal** during scaffolding (with MongoDB), a working `POST /auth/refresh` route is already generated for you: it stores a rotating long-lived refresh token in the database and reads it from an `efc_refresh_token` cookie or the `refreshToken` body field (see [Generated Portals](./generated-portals.md)).
+There is currently no refresh-token mechanism built into the framework itself. For long-lived sessions with short-lived tokens, implement a `/auth/refresh` route that issues a new token using the existing one as a credential — the `account-security` feature (`efc add account-security`) generates a working `POST /auth/refresh` route: it stores a rotating long-lived refresh token in the database and reads it from an `efc_refresh_token` cookie or the `refreshToken` body field (see [Generated Portals](./generated-portals.md)).
 
 ---
 

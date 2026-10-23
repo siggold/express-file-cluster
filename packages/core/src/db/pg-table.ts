@@ -19,7 +19,15 @@ import {
   type ScalarType,
   type SchemaTree,
 } from './schema.js';
-import { currentTx, getRegisteredModel, isAutoSync, registeredModels } from './engine.js';
+import {
+  currentTx,
+  getRegisteredModel,
+  isAutoSync,
+  isSyncSuppressed,
+  registeredModels,
+  type PlanOptions,
+  type PlanStep,
+} from './engine.js';
 import { getOrm, getPool } from './postgres.js';
 import { getLogger } from '../logger.js';
 
@@ -746,8 +754,9 @@ export function pgTable(
    * and added by a second pass once that sync finishes.
    */
   async function reconcile(dryRun: boolean): Promise<string[]> {
+    if (isSyncSuppressed()) return [];
     const fks = foreignKeys();
-    if (dryRun) return reconcileTable(true, fks, new Set());
+    if (dryRun) return statements(await reconcileTable({ dryRun: true }, fks, new Set()));
     let release!: () => void;
     const mine = new Promise<void>((resolve) => (release = resolve));
     const prev = syncing.get(table);
@@ -782,7 +791,7 @@ export function pgTable(
           await getRegisteredModel(fk.target)!.sync();
         }
       }
-      return await reconcileTable(false, fks, deferred);
+      return statements(await reconcileTable({ dryRun: false }, fks, deferred));
     } finally {
       release();
       if (syncing.get(table) === mine) {
@@ -792,11 +801,23 @@ export function pgTable(
     }
   }
 
+  const statements = (steps: PlanStep[]) => steps.filter((s) => !s.check).map((s) => s.sql);
+
+  /**
+   * The migration `efc db generate` writes for this table: what sync would do, plus the
+   * explicit extras (`allowDrop`, `tighten`), each step with a best-effort reverse.
+   */
+  function plan(options: PlanOptions = {}): Promise<PlanStep[]> {
+    return reconcileTable({ dryRun: true, plan: options }, foreignKeys(), new Set());
+  }
+
   async function reconcileTable(
-    dryRun: boolean,
+    mode: { dryRun: boolean; plan?: PlanOptions },
     fks: ForeignKey[],
     deferred: Set<string>,
-  ): Promise<string[]> {
+  ): Promise<PlanStep[]> {
+    const { dryRun } = mode;
+    const generating = mode.plan !== undefined;
     const pool = getPool();
     const conn = await pool.connect();
     try {
@@ -814,29 +835,36 @@ export function pgTable(
           )
         ).rows.map((r) => [r.name, { type: r.type, nullable: r.nullable }]),
       );
-      const checks = new Map<string, string>(
+      const checks = new Map<string, { def: string; valid: boolean }>(
         (
-          await conn.query<{ name: string; def: string }>(
-            `SELECT con.conname AS name, pg_get_constraintdef(con.oid) AS def
+          await conn.query<{ name: string; def: string; valid: boolean }>(
+            `SELECT con.conname AS name, pg_get_constraintdef(con.oid) AS def, con.convalidated AS valid
              FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE c.relname = $1 AND n.nspname = current_schema() AND con.contype = 'c'`,
             [table],
           )
-        ).rows.map((r) => [r.name, r.def]),
+        ).rows.map((r) => [r.name, { def: r.def, valid: r.valid }]),
       );
-      const indexes = new Set(
+      const indexes = new Map(
         (
-          await conn.query<{ name: string }>(
-            `SELECT indexname AS name FROM pg_indexes WHERE tablename = $1 AND schemaname = current_schema()`,
+          await conn.query<{ name: string; def: string }>(
+            `SELECT indexname AS name, indexdef AS def FROM pg_indexes WHERE tablename = $1 AND schemaname = current_schema()`,
             [table],
           )
-        ).rows.map((r) => r.name),
+        ).rows.map((r) => [r.name, r.def]),
       );
 
       const liveFks = new Map(
         (
-          await conn.query<{ name: string; target: string; action: string; valid: boolean }>(
-            `SELECT con.conname AS name, ft.relname AS target, con.confdeltype AS action, con.convalidated AS valid
+          await conn.query<{
+            name: string;
+            target: string;
+            action: string;
+            valid: boolean;
+            def: string;
+          }>(
+            `SELECT con.conname AS name, ft.relname AS target, con.confdeltype AS action, con.convalidated AS valid,
+                    pg_get_constraintdef(con.oid) AS def
              FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
              JOIN pg_class ft ON ft.oid = con.confrelid
              WHERE c.relname = ANY($1) AND n.nspname = current_schema() AND con.contype = 'f'`,
@@ -854,7 +882,13 @@ export function pgTable(
         ).rows.map((r) => r.name),
       );
 
-      const plan: string[] = [];
+      const steps: PlanStep[] = [];
+      const add = (sql: string, extra: Omit<Partial<PlanStep>, 'sql'> = {}) => {
+        if (!steps.some((s) => s.sql === sql)) steps.push({ phase: 'main', ...extra, sql });
+      };
+      const columnExists = (column: string) =>
+        `SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ${literal(table)} AND column_name = ${literal(column)}`;
+
       // Foreign keys on the model's fields that it no longer declares (or declares
       // differently) go first, before any column type change. Constraints on columns the
       // model doesn't declare are left alone.
@@ -870,17 +904,23 @@ export function pgTable(
           (!want || live.target !== want.targetTable || live.action !== ACTION_CODE[want.action])
         ) {
           const on = [...joinByTable.keys()].find((jt) => con.startsWith(`${jt}_`)) ?? table;
-          plan.push(`ALTER TABLE ${q(on)} DROP CONSTRAINT ${q(con)}`);
+          add(`ALTER TABLE ${q(on)} DROP CONSTRAINT IF EXISTS ${q(con)}`, {
+            down: `ALTER TABLE ${q(on)} ADD CONSTRAINT ${q(con)} ${live.def}`,
+          });
           liveFks.delete(con);
         }
       }
       for (const { key } of sequences) {
         const seq = sequenceName(key);
         const found = await conn.query(
-          'SELECT 1 FROM pg_class WHERE relkind = $1 AND relname = $2',
-          ['S', seq],
+          `SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE c.relkind = 'S' AND c.relname = $1 AND n.nspname = current_schema()`,
+          [seq],
         );
-        if (found.rowCount === 0) plan.push(`CREATE SEQUENCE IF NOT EXISTS ${q(seq)}`);
+        if (found.rowCount === 0)
+          add(`CREATE SEQUENCE IF NOT EXISTS ${q(seq)}`, {
+            down: `DROP SEQUENCE IF EXISTS ${q(seq)}`,
+          });
       }
 
       // Native enum types: create, or add values the model gained. Values are never
@@ -903,13 +943,13 @@ export function pgTable(
         for (const spec of enumSpecs) {
           const have = live.get(spec.enumType!);
           if (!have) {
-            plan.push(
-              `CREATE TYPE ${spec.ddl} AS ENUM (${spec.enumValues!.map(literal).join(', ')})`,
-            );
+            add(`CREATE TYPE ${spec.ddl} AS ENUM (${spec.enumValues!.map(literal).join(', ')})`, {
+              down: `DROP TYPE IF EXISTS ${spec.ddl}`,
+              skipIf: `SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = current_schema() AND t.typname = ${literal(spec.enumType!)}`,
+            });
           } else {
             for (const v of spec.enumValues!) {
-              if (!have.has(v))
-                plan.push(`ALTER TYPE ${spec.ddl} ADD VALUE IF NOT EXISTS ${literal(v)}`);
+              if (!have.has(v)) add(`ALTER TYPE ${spec.ddl} ADD VALUE IF NOT EXISTS ${literal(v)}`);
             }
           }
         }
@@ -923,33 +963,62 @@ export function pgTable(
         idKind === 'uuid'
           ? `${q('id')} uuid PRIMARY KEY DEFAULT gen_random_uuid()`
           : `${q('id')} ${idSpec.ddl} GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`;
+      const isRequired = (spec: ColumnSpec) =>
+        spec.field !== 'id' && spec.node?.kind !== undefined && spec.node.def.required === true;
 
       if (existing.size === 0) {
         const defs = [...columns.values()].map((spec) =>
           spec.field === 'id' ? idSql : columnSql(spec),
         );
-        plan.push(`CREATE TABLE IF NOT EXISTS ${q(table)} (\n  ${defs.join(',\n  ')}\n)`);
+        add(`CREATE TABLE IF NOT EXISTS ${q(table)} (\n  ${defs.join(',\n  ')}\n)`, {
+          down: `DROP TABLE IF EXISTS ${q(table)}`,
+        });
       } else {
-        const alters: string[] = [];
+        // Renames first: `renamedFrom` moves the old column (and its data) to the new name
+        // instead of adding an empty one beside it.
+        for (const spec of columns.values()) {
+          const old = spec.node?.def.renamedFrom;
+          if (old === undefined || existing.has(spec.column)) continue;
+          const oldColumn = columnName(old);
+          const col = existing.get(oldColumn);
+          if (!col) continue;
+          add(`ALTER TABLE ${q(table)} RENAME COLUMN ${q(oldColumn)} TO ${q(spec.column)}`, {
+            down: `ALTER TABLE ${q(table)} RENAME COLUMN ${q(spec.column)} TO ${q(oldColumn)}`,
+            skipIf: columnExists(spec.column),
+          });
+          existing.delete(oldColumn);
+          existing.set(spec.column, col);
+        }
         for (const spec of columns.values()) {
           const col = existing.get(spec.column);
           if (!col) {
-            alters.push(`ALTER TABLE ${q(table)} ADD COLUMN ${columnSql(spec)}`);
+            add(`ALTER TABLE ${q(table)} ADD COLUMN IF NOT EXISTS ${columnSql(spec)}`, {
+              down: `ALTER TABLE ${q(table)} DROP COLUMN IF EXISTS ${q(spec.column)}`,
+            });
           } else if (spec.field !== 'id' && needsTypeChange(spec, col.type)) {
-            if (spec.kind === 'array' && col.type === 'jsonb' && !plan.includes(jsonbToArrayFn))
-              plan.push(jsonbToArrayFn);
-            alters.push(
+            if (spec.kind === 'array' && col.type === 'jsonb') add(jsonbToArrayFn, { down: '' });
+            const back =
+              col.type === 'jsonb'
+                ? `to_jsonb(${q(spec.column)})`
+                : `${q(spec.column)}::${col.type}`;
+            add(
               `ALTER TABLE ${q(table)} ALTER COLUMN ${q(spec.column)} TYPE ${spec.ddl} USING ${castExpr(spec, col.type)}`,
+              {
+                down: `ALTER TABLE ${q(table)} ALTER COLUMN ${q(spec.column)} TYPE ${col.type} USING ${back}`,
+                skipIf: `SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relname = ${literal(table)} AND a.attname = ${literal(spec.column)} AND format_type(a.atttypid, a.atttypmod) = ${literal(spec.formatted)}`,
+              },
             );
           }
         }
-        plan.push(...new Set(alters));
-        // NOT NULL is the model's job (validation), as on MongoDB: relax any left over from
-        // an older model or an earlier EFC version, so dropping/loosening a field never
-        // breaks inserts. Columns the model no longer declares are kept, just optional.
+        // NOT NULL is the model's job (validation), as on MongoDB: relax any the model
+        // doesn't ask for — left over from an older model, an earlier EFC version, or a
+        // column it no longer declares — so dropping/loosening a field never breaks inserts.
         for (const [column, col] of existing) {
-          if (column !== 'id' && !col.nullable) {
-            plan.push(`ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} DROP NOT NULL`);
+          const spec = byColumn.get(column);
+          if (column !== 'id' && !col.nullable && !(spec && isRequired(spec))) {
+            add(`ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} DROP NOT NULL`, {
+              down: `ALTER TABLE ${q(table)} ALTER COLUMN ${q(column)} SET NOT NULL`,
+            });
           }
         }
       }
@@ -966,14 +1035,19 @@ export function pgTable(
           );
         }
       }
-      for (const [con, def] of checks) {
+      for (const [con, { def }] of checks) {
         const legacy = con.endsWith('_check') && con.startsWith(`${table}_`); // inline CHECKs from older EFC
+        const drop = () => {
+          add(`ALTER TABLE ${q(table)} DROP CONSTRAINT IF EXISTS ${q(con)}`, {
+            down: `ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(con)} ${def}`,
+          });
+          checks.delete(con);
+        };
         if (
           (con.endsWith('_enum') && con.startsWith(`${table}_`) && !wantedChecks.has(con)) ||
           legacy
         ) {
-          plan.push(`ALTER TABLE ${q(table)} DROP CONSTRAINT ${q(con)}`);
-          checks.delete(con);
+          drop();
         } else if (wantedChecks.has(con)) {
           const want = wantedChecks.get(con)!;
           // pg_get_constraintdef normalises the text; compare the value lists only.
@@ -982,30 +1056,34 @@ export function pgTable(
               .map((m) => m[1] ?? m[2])
               .sort()
               .join('|');
-          if (values(def) !== values(want)) {
-            plan.push(`ALTER TABLE ${q(table)} DROP CONSTRAINT ${q(con)}`);
-            checks.delete(con);
-          }
+          if (values(def) !== values(want)) drop();
         }
       }
       for (const [con, def] of wantedChecks) {
         if (!checks.has(con))
-          plan.push(`ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(con)} ${def} NOT VALID`);
+          add(`ALTER TABLE ${q(table)} ADD CONSTRAINT ${q(con)} ${def} NOT VALID`, {
+            down: `ALTER TABLE ${q(table)} DROP CONSTRAINT IF EXISTS ${q(con)}`,
+            skipIf: `SELECT 1 FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relname = ${literal(table)} AND con.conname = ${literal(con)}`,
+          });
       }
 
       // Indexes: create declared ones, drop EFC-named ones the model no longer declares.
       const wantedIndexes = desiredIndexes();
-      for (const idx of indexes) {
+      for (const [idx, def] of indexes) {
         if (
           idx !== `${table}_pkey` &&
           idx.startsWith(`${table}_`) &&
           managedIndexName.test(idx) &&
           !wantedIndexes.has(idx)
         ) {
-          plan.push(`DROP INDEX ${q(idx)}`);
+          add(`DROP INDEX IF EXISTS ${q(idx)}`, { down: def });
         }
       }
-      for (const [idx, create] of wantedIndexes) if (!indexes.has(idx)) plan.push(create);
+      for (const [idx, create] of wantedIndexes)
+        if (!indexes.has(idx))
+          add(create.replace(/^CREATE (UNIQUE )?INDEX /, 'CREATE $1INDEX IF NOT EXISTS '), {
+            down: `DROP INDEX IF EXISTS ${q(idx)}`,
+          });
 
       // Join tables for many-to-many refs: created once, filled from the array column the
       // field used before (if any). That column is kept, as sync never drops columns.
@@ -1013,9 +1091,13 @@ export function pgTable(
       for (const join of joins.values()) {
         if (liveJoinTables.has(join.table)) continue;
         const refDdl = join.item;
-        plan.push(
+        add(
           `CREATE TABLE IF NOT EXISTS ${q(join.table)} (\n  ${q('owner_id')} ${ownerDdl} NOT NULL,\n  ${q('ref_id')} ${refDdl} NOT NULL,\n  ${q('position')} integer NOT NULL DEFAULT 0,\n  PRIMARY KEY (${q('owner_id')}, ${q('ref_id')})\n)`,
+          { down: `DROP TABLE IF EXISTS ${q(join.table)}` },
+        );
+        add(
           `CREATE INDEX IF NOT EXISTS ${q(`${join.table}_ref_id_idx`)} ON ${q(join.table)} (${q('ref_id')})`,
+          { down: '' }, // dropped with the table
         );
         const legacy = existing.get(join.legacyColumn)?.type;
         if (legacy === 'jsonb' || legacy?.endsWith('[]')) {
@@ -1028,31 +1110,85 @@ export function pgTable(
             join.item === 'uuid'
               ? `'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'`
               : `'^-?[0-9]{1,18}$'`;
-          plan.push(
+          add(
             `INSERT INTO ${q(join.table)} (${q('owner_id')}, ${q('ref_id')}, ${q('position')}) SELECT o.${q('id')}, x.v::${refDdl}, x.n FROM ${q(table)} o, ${items} WITH ORDINALITY AS x(v, n) WHERE x.v ~ ${valid} ON CONFLICT DO NOTHING`,
+            { down: '' }, // the old column is kept
           );
         }
       }
 
+      // `efc db generate` only, never automatic: changes that can fail on existing rows or
+      // lose data. Each tightening is guarded by a check that names the offending rows.
+      if (mode.plan?.tighten) {
+        for (const spec of columns.values()) {
+          if (!isRequired(spec) || existing.get(spec.column)?.nullable === false) continue;
+          add(`SELECT count(*)::int AS n FROM ${q(table)} WHERE ${q(spec.column)} IS NULL`, {
+            check: `${name}.${spec.field} is required, but %n row(s) of "${table}" have no value — fill them in, then run the migration again`,
+          });
+          add(`ALTER TABLE ${q(table)} ALTER COLUMN ${q(spec.column)} SET NOT NULL`, {
+            down: `ALTER TABLE ${q(table)} ALTER COLUMN ${q(spec.column)} DROP NOT NULL`,
+          });
+        }
+        for (const [con, def] of wantedChecks) {
+          if (checks.get(con)?.valid) continue;
+          const spec = byColumn.get(con.slice(table.length + 1, -'_enum'.length));
+          const values = /IN \((.*)\)\)$/.exec(def)?.[1];
+          if (spec && values) {
+            add(
+              `SELECT count(*)::int AS n FROM ${q(table)} WHERE ${q(spec.column)} IS NOT NULL AND ${q(spec.column)} NOT IN (${values})`,
+              {
+                check: `${name}.${spec.field}: %n row(s) of "${table}" hold a value outside its enum — fix them, then run the migration again`,
+              },
+            );
+          }
+          add(`ALTER TABLE ${q(table)} VALIDATE CONSTRAINT ${q(con)}`, { down: '' });
+        }
+      }
+      if (mode.plan?.allowDrop) {
+        for (const [column, col] of existing) {
+          if (byColumn.has(column)) continue;
+          add(`ALTER TABLE ${q(table)} DROP COLUMN IF EXISTS ${q(column)}`, {
+            down: `ALTER TABLE ${q(table)} ADD COLUMN IF NOT EXISTS ${q(column)} ${col.type} -- data is not restored`,
+          });
+        }
+      }
+
       // Added NOT VALID — instant, and existing rows can't fail the sync — then validated
-      // after the commit, where orphaned rows only produce a warning.
+      // after the commit, where orphaned rows only produce a warning. A generated
+      // migration validates in the same run, behind an orphaned-rows check.
       const toValidate: ForeignKey[] = [];
       for (const fk of fks) {
         if (deferred.has(fk.name)) continue;
         const live = liveFks.get(fk.name);
         if (!live) {
-          plan.push(
+          add(
             `ALTER TABLE ${q(fk.onTable)} ADD CONSTRAINT ${q(fk.name)} FOREIGN KEY (${q(fk.column)}) REFERENCES ${q(fk.targetTable)} (${q('id')}) ON DELETE ${ACTION_SQL[fk.action]} NOT VALID`,
+            {
+              phase: 'fk',
+              down: `ALTER TABLE ${q(fk.onTable)} DROP CONSTRAINT IF EXISTS ${q(fk.name)}`,
+              skipIf: `SELECT 1 FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relname = ${literal(fk.onTable)} AND con.conname = ${literal(fk.name)}`,
+            },
           );
         }
         if (!live?.valid) toValidate.push(fk);
       }
+      const orphans = (fk: ForeignKey) =>
+        `SELECT count(*)::int AS n FROM ${q(fk.onTable)} r WHERE ${q(fk.column)} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM ${q(fk.targetTable)} t WHERE t.${q('id')} = r.${q(fk.column)})`;
       const validations = toValidate.map(
         (fk) => `ALTER TABLE ${q(fk.onTable)} VALIDATE CONSTRAINT ${q(fk.name)}`,
       );
+      if (generating) {
+        for (const [i, fk] of toValidate.entries()) {
+          add(orphans(fk), {
+            phase: 'fk',
+            check: `${name}.${fk.field}: %n row(s) reference a missing ${fk.target} — fix them, then run the migration again`,
+          });
+          add(validations[i]!, { phase: 'fk', down: '' });
+        }
+      }
 
       if (!dryRun) {
-        for (const stmt of plan) {
+        for (const { sql: stmt } of steps) {
           try {
             await conn.query(stmt);
           } catch (err) {
@@ -1068,21 +1204,20 @@ export function pgTable(
           try {
             await conn.query(validations[i]!);
           } catch {
-            const orphans = await conn
-              .query<{ n: string }>(
-                `SELECT count(*) AS n FROM ${q(fk.onTable)} r WHERE ${q(fk.column)} IS NOT NULL
-                 AND NOT EXISTS (SELECT 1 FROM ${q(fk.targetTable)} t WHERE t.${q('id')} = r.${q(fk.column)})`,
-              )
+            const n = await conn
+              .query<{ n: number }>(orphans(fk))
               .then((r) => r.rows[0]?.n ?? '?')
               .catch(() => '?');
             getLogger().warn(
-              { table, constraint: fk.name, orphans: Number(orphans) },
-              `${name}.${fk.field}: ${orphans} row(s) reference a missing ${fk.target} — the foreign key applies to new writes; fix those rows, then run efc db sync to validate it`,
+              { table, constraint: fk.name, orphans: Number(n) },
+              `${name}.${fk.field}: ${n} row(s) reference a missing ${fk.target} — the foreign key applies to new writes; fix those rows, then run efc db sync to validate it`,
             );
           }
         }
       }
-      return [...plan, ...validations];
+      return generating
+        ? steps
+        : [...steps, ...validations.map((sql) => ({ sql, phase: 'fk' as const }))];
     } catch (err) {
       await conn.query('ROLLBACK').catch(() => {});
       throw err;
@@ -1118,6 +1253,7 @@ export function pgTable(
     prepareInsert,
     guard,
     reconcile,
+    plan,
     drop,
   };
 }

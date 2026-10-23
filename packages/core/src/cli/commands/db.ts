@@ -54,9 +54,41 @@ const common = (cmd: Command) =>
 export function dbCommand(): Command {
   const cmd = new Command('db').description('Database migrations, seeds and studio');
 
-  common(cmd.command('migrate').description('Run pending migrations in src/migrations')).action(
-    (opts: { databaseUrl?: string; dist?: boolean }) => run('migrate', opts),
-  );
+  common(cmd.command('migrate').description('Run pending migrations in src/migrations'))
+    .option(
+      '--baseline',
+      'record pending migrations as applied without running them (the schema already matches)',
+    )
+    .action((opts: { databaseUrl?: string; dist?: boolean; baseline?: boolean }) =>
+      run('migrate', opts),
+    );
+
+  common(
+    cmd
+      .command('generate')
+      .description(
+        'Write a migration that brings the schema from src/migrations in line with the models',
+      )
+      .argument('[name]', 'migration name, e.g. add_posts (omit to only print the plan)'),
+  )
+    .option('--allow-drop', 'also drop columns the models no longer declare (data is lost)')
+    .option('--tighten', 'add NOT NULL for required fields and validate enum checks')
+    .option(
+      '--verify',
+      'replay all migrations into a scratch schema and fail if they miss anything',
+    )
+    .action(
+      (
+        name: string | undefined,
+        opts: {
+          databaseUrl?: string;
+          dist?: boolean;
+          allowDrop?: boolean;
+          tighten?: boolean;
+          verify?: boolean;
+        },
+      ) => run('generate', { ...opts, ...(name !== undefined && { name }) }),
+    );
 
   common(cmd.command('rollback').description('Revert the last batch of migrations'))
     .option('--steps <n>', 'number of batches to revert', '1')
@@ -75,8 +107,24 @@ export function dbCommand(): Command {
       .description('Bring tables/collections and indexes in line with the models in src/model(s)'),
   )
     .option('--dry-run', 'print the changes (SQL on PostgreSQL) without applying them')
-    .action((opts: { databaseUrl?: string; dist?: boolean; dryRun?: boolean }) =>
-      run('sync', opts),
+    .option(
+      '--exit-code',
+      'with --dry-run: exit with code 2 when there are changes (CI drift check)',
+    )
+    .action(
+      (opts: { databaseUrl?: string; dist?: boolean; dryRun?: boolean; exitCode?: boolean }) =>
+        run('sync', opts),
+    );
+
+  common(
+    cmd
+      .command('pull')
+      .description('Write defineTable models for the tables in the database (PostgreSQL)'),
+  )
+    .option('--out <dir>', 'where to write the models', 'src/model')
+    .option('--force', 'overwrite model files that already exist')
+    .action((opts: { databaseUrl?: string; dist?: boolean; out: string; force?: boolean }) =>
+      run('pull', opts),
     );
 
   common(cmd.command('status').description('List applied and pending migrations')).action(

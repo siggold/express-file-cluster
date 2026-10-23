@@ -1,21 +1,18 @@
 # Mailer
 
-`create-efc-app` can scaffold a working transactional email setup — a real `nodemailer` transport wired to environment variables, plus a `SendEmail` background task — so you never hand-write SMTP boilerplate.
+Every EFC app has a `SendEmail` background task. In the base app it's a stub that logs the message. The **email client** feature (`email-client`, alias `mailer`) replaces it with a real `nodemailer` transport wired to environment variables, so you never hand-write SMTP boilerplate.
 
 ---
 
 ## Enabling it
 
-Toggle **Mailer** in the features multiselect during scaffolding:
+Pick **Email client** under *Integrations* when `create-efc-app` asks which features to add, or add it to an existing app:
 
-```
-? Features: (space to toggle, enter to confirm)
-    ◉ Background tasks
-    ...
-    ◉ Mailer
+```bash
+efc add email-client     # replaces the SendEmail stub, adds nodemailer, asks for your SMTP settings
 ```
 
-You'll then be asked to choose a provider:
+Both ask the same questions and write the answers to `.env`. (Without a terminal, or with `--no-prompt`, `efc add` writes placeholders instead.)
 
 ```
 ? Email provider:
@@ -145,7 +142,7 @@ See [Background Tasks](../core-concepts/background-tasks.md) for retry/backoff b
 
 ## Auth routes wired to the mailer
 
-If **User portal** is enabled alongside **Mailer** (MongoDB only), these generated routes automatically `enqueue('SendEmail', ...)` instead of leaving a `// TODO`:
+These generated routes always `enqueue('SendEmail', ...)`:
 
 | Route | Sends |
 |---|---|
@@ -153,7 +150,7 @@ If **User portal** is enabled alongside **Mailer** (MongoDB only), these generat
 | `POST /auth/verify-email` (resend) | Same verification email, with a freshly generated token |
 | `POST /auth/forgot-password` | Reset email with a link to `${APP_URL}/auth/reset-password?token=...` |
 
-With **User portal** but *without* **Mailer**, these routes still generate and store the token in the database — they just leave a `// TODO: email this token to the user` comment where the `enqueue()` call would go, since there's no `SendEmail` task to call.
+Without the mailer, the base `SendEmail` stub just logs each message (recipient and subject), so registration and password reset work in development without SMTP. Run `efc add email-client` when you want real email.
 
 ---
 

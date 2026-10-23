@@ -10,6 +10,8 @@ import { runCommand } from './commands/run.js';
 import { generateCommand } from './commands/generate.js';
 import { diagnosticsCommands } from './commands/diagnostics.js';
 import { dbCommand } from './commands/db.js';
+import { registryCommands } from './commands/registry.js';
+import { importPrismaCommand } from './commands/import-prisma.js';
 
 // package.json sits two levels up from both src/cli/index.ts and dist/cli/index.js.
 const { version } = JSON.parse(
@@ -54,6 +56,8 @@ function run(): void {
   program.addCommand(runCommand());
   program.addCommand(generateCommand());
   program.addCommand(dbCommand());
+  program.addCommand(importPrismaCommand());
+  for (const cmd of registryCommands()) program.addCommand(cmd);
 
   for (const cmd of diagnosticsCommands()) {
     program.addCommand(cmd);

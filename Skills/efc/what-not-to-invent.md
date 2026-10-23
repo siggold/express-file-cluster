@@ -133,12 +133,24 @@ export default async function(req, res) { ... }   // NOT called as a route handl
 ```bash
 efc lint            # NOT IMPLEMENTED
 efc deploy          # NOT IMPLEMENTED
-efc db generate     # NOT IMPLEMENTED — no schema-diff migration generator; write migrations
-                    # by hand (efc generate migration <name>) and call Model.sync()
 efc db reset / fresh # NOT IMPLEMENTED
+efc db push         # NOT IMPLEMENTED — that's `efc db sync` (or autoSync)
+efc db pull         # PostgreSQL only — MongoDB is NOT supported (exits with an error)
+efc remove <item>   # NOT IMPLEMENTED — `efc add` copies files; delete them yourself
+efc add <url|@ns/x> # NOT IMPLEMENTED — only the built-in registry (efc list); no third-party registries
 ```
 
-Implemented commands: `start dev|prod`, `build prod`, `run tests`, `generate route|task|middleware|migration|seed`, `db migrate|rollback|status|seed|studio`, `routes`, `tasks` (+ `failed|retry|purge`), `doctor`, `--version`.
+`efc add | list | view | diff | init` DO exist (the feature registry, `docs/cli/add.md`).
+OAuth sign-in exists only as registry items (`efc add auth@google`, `efc add auth@apple`) —
+app code in `src/api/auth/<provider>/` + `src/lib/oauth`; there is NO framework OAuth API
+(no `passport`, no `oauth` option on `ignite()`, no other providers).
+
+Implemented commands: `start dev|prod`, `build prod`, `run tests`, `generate route|task|middleware|migration|seed`, `db generate|migrate|rollback|status|sync|pull|seed|studio`, `import-prisma`, `routes`, `tasks` (+ `failed|retry|purge`), `doctor`, `--version`.
+
+`efc db generate [name] [--allow-drop] [--tighten] [--verify]` DOES exist: it replays the
+migrations into a throwaway schema/database, diffs the models against it and writes
+`src/migrations/<ts>_<name>.(ts|js)`. Flags: `efc db sync --dry-run --exit-code` (exit 2 on
+drift), `efc db migrate --baseline` (record as applied without running).
 
 ---
 
@@ -150,9 +162,13 @@ Implemented commands: `start dev|prod`, `build prod`, `run tests`, `generate rou
 // ✅ Tables are created and reconciled automatically on first use (autoSync, default on):
 //    add column, change type (with cast), drop stale NOT NULL, rebuild enum CHECK,
 //    create/drop EFC-named indexes. `efc db sync --dry-run` prints the SQL.
-// ❌ Sync never DROPS or RENAMES columns and never deletes rows — renames, splits and
-//    backfills need a hand-written migration (db.query()).
-// ❌ No `efc db generate` that writes migration files from model diffs.
+// ✅ Sync RENAMES a column when the field declares `renamedFrom: 'oldName'` (PostgreSQL);
+//    on MongoDB `efc db generate` writes the `$rename` migration.
+// ❌ Sync never DROPS columns, never adds NOT NULL and never deletes rows — that's
+//    `efc db generate <name> --allow-drop` / `--tighten` (explicit, reviewed migrations).
+//    Splits and backfills still need a hand-written migration (db.query()).
+// ✅ `efc db generate` writes migrations from model diffs; `efc db pull` (PostgreSQL) and
+//    `efc import-prisma` write defineTable model files.
 // ❌ No joins in the model API — populate does a second query; for SQL joins use
 //    Drizzle via Model.raw() or db.query().
 // ❌ aggregate() is MongoDB-only (rejects on PostgreSQL).

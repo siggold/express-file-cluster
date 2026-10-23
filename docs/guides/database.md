@@ -71,6 +71,7 @@ Editing a model later works the same on both engines:
 |---|---|---|
 | Add a field | new documents have it | `ADD COLUMN` |
 | Remove a field | old documents keep it, it's ignored | the column stays (no data loss), it's ignored |
+| Rename a field (`renamedFrom: 'old'`) | old documents keep the old name until a migration (`efc db generate`) moves it | `RENAME COLUMN` — the data comes along |
 | Make a field optional / drop `required` | works | relaxes any `NOT NULL` |
 | Add or remove `enum` values | works | rebuilds the enum `CHECK` (existing rows aren't re-checked) |
 | Change a field's `type` | new writes use it | `ALTER COLUMN … TYPE … USING <cast>` — fails clearly if existing data can't convert |
@@ -78,7 +79,7 @@ Editing a model later works the same on both engines:
 
 On MongoDB the first query also waits for the collection's indexes, so `unique` is enforced from the very first write. If an index can't be built (e.g. duplicates are already stored) EFC logs a warning and the model keeps working without it — fix the data and run `efc db sync`.
 
-Required fields, enums, bounds and custom validators are enforced by the model on writes, as on MongoDB. Columns and rows are never dropped by sync.
+Required fields, enums, bounds and custom validators are enforced by the model on writes, as on MongoDB. Columns and rows are never dropped by sync. To drop columns, or to enforce `NOT NULL` in the database too, generate a migration: `efc db generate <name> --allow-drop --tighten`.
 
 Fields the model doesn't declare behave like mongoose's defaults on both engines: ignored on writes, treated as absent in filters (`{ legacy: null }` and `{ legacy: { $exists: false } }` match), ignored in `sort`/`select`.
 
@@ -90,7 +91,7 @@ efc db sync             # apply it now
 efc db studio           # browse rows and each table's structure
 ```
 
-Prefer every schema change to go through review? Set `autoSync: false` in `ignite()` and apply changes with `efc db sync` or migrations (`Model.sync()` in `up()`). See [Migrations & Seeds](./migrations.md).
+Prefer every schema change to go through review? Set `autoSync: false` in `ignite()`. Then `efc db generate <name>` writes each change as a migration, and `efc db generate --verify` in CI checks that none is missing. See [Migrations & Seeds](./migrations.md).
 
 ---
 

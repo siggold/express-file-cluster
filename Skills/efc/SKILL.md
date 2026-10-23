@@ -37,8 +37,8 @@ Load **only** the module the work points to. Each is self-contained.
   docs/                   ← full documentation
 ```
 
-## Status (v0.7.1 — Beta, Phase 2 complete + defineTable with relations)
+## Status (v0.8.0 — Beta, Phase 2 complete + defineTable with relations + `efc add` registry)
 
-Implemented: file-based router (incl. `[[id]]`, `[...slug]`, `[[...slug]]`), request validation (`export const schema`, Standard Schema), multi-core clustering with graceful shutdown, http-only + localStorage auth, structured logging (pino, request IDs), `defineModel` on MongoDB (mongoose) **and** PostgreSQL (Drizzle) with validation, query options, bulk ops, transactions, `sync()`/`drop()`, PostgreSQL-native `defineTable` (Prisma-style queries, foreign keys, many-to-many, `include`, relation filters, nested writes), query logging (`logging.queries`), BullMQ **and** pg-boss task backends with cron schedules and dead-letter CLI, worker_threads for CPU-bound tasks, migrations/seeds/studio (`efc db`), full CLI.
+Implemented: file-based router (incl. `[[id]]`, `[...slug]`, `[[...slug]]`), request validation (`export const schema`, Standard Schema), multi-core clustering with graceful shutdown, http-only + localStorage auth, structured logging (pino, request IDs), `defineModel` on MongoDB (mongoose) **and** PostgreSQL (Drizzle) with validation, query options, bulk ops, transactions, `sync()`/`drop()`, PostgreSQL-native `defineTable` (Prisma-style queries, foreign keys, many-to-many, `include`, relation filters, nested writes), query logging (`logging.queries`), BullMQ **and** pg-boss task backends with cron schedules and dead-letter CLI, worker_threads for CPU-bound tasks, migrations/seeds/studio (`efc db`) incl. migrations generated from model diffs (`efc db generate`), `efc db pull` and `efc import-prisma`, full CLI.
 
-**Not yet implemented (Phase 3+):** WebSockets, plugins, OpenAPI generation, OpenTelemetry, `efc lint`, `efc deploy`, schema-diff migration generation.
+**Not yet implemented (Phase 3+):** WebSockets, plugins, OpenAPI generation, OpenTelemetry, `efc lint`, `efc deploy`, `defineCollection`.

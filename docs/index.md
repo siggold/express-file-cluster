@@ -2,7 +2,7 @@
 
 **express-file-cluster (EFC)** is an opinionated backend framework built on Express. It removes routing ceremony, saturates every CPU core automatically, and ships a production-grade background-task subsystem — all from a single `ignite()` call.
 
-> **Status: v0.7.1 — Beta.** File-based routing (incl. catch-all and optional segments), request validation, clustering, auth, structured logging, MongoDB and PostgreSQL models with types inferred from the schema, PostgreSQL-native `defineTable` (Prisma-style queries and relations: foreign keys, many-to-many, `include`, relation filters, nested writes), query logging, BullMQ and pg-boss tasks with cron and dead-letter tooling, and migrations are all implemented.
+> **Status: v0.8.0 — Beta.** File-based routing (incl. catch-all and optional segments), request validation, clustering, auth, structured logging, MongoDB and PostgreSQL models with types inferred from the schema, PostgreSQL-native `defineTable` (Prisma-style queries and relations: foreign keys, many-to-many, `include`, relation filters, nested writes), query logging, BullMQ and pg-boss tasks with cron and dead-letter tooling, migrations, and the `efc add` feature registry (auth, admin, billing… copied into your app as source you own) are all implemented.
 
 ---
 
@@ -26,7 +26,7 @@
 | [Getting Started](./getting-started/index.md) | Scaffold a project, understand the structure |
 | [Core Concepts](./core-concepts/index.md) | The four pillars: routing, clustering, tasks, middleware |
 | [API Reference](./api-reference/ignite.md) | Every exported function and type, fully documented |
-| [Guides](./guides/authentication.md) | Deep-dives: auth, database, RBAC, mailer, error handling, deployment |
+| [Guides](./guides/authentication.md) | Deep-dives: auth, OAuth, database, RBAC, mailer, error handling, deployment |
 | [CLI](./cli/index.md) | All `efc` commands with flags and examples |
 | [Contributing](./contributing/index.md) | Roadmap, branch conventions, PR requirements |
 
@@ -38,12 +38,14 @@
 | [RBAC](./guides/rbac.md) | Role-based route protection via the `requireAuth('role')` shorthand |
 | [Database](./guides/database.md) | `defineModel`, queries, transactions, MongoDB vs PostgreSQL |
 | [defineTable](./api-reference/table.md) | PostgreSQL-native models: Prisma-style queries, SQL types, aggregation |
-| [Migrations & Seeds](./guides/migrations.md) | `efc db migrate / rollback / seed / studio` |
+| [Migrations & Seeds](./guides/migrations.md) | `efc db generate / migrate / rollback / pull / seed / studio`, drift checks |
+| [Coming from Prisma](./guides/coming-from-prisma.md) | `efc import-prisma`, schema and query mapping |
 | [Validation](./guides/validation.md) | Route `schema` exports with zod, valibot, arktype |
 | [Logging](./guides/logging.md) | pino, request IDs, `getLogger()` |
 | [Caching & Sessions](./guides/caching.md) | `cache`, `cacheResponse`, revoking JWT sessions |
 | [Generated Portals](./guides/generated-portals.md) | Every model and route `create-efc-app` scaffolds for the User/Admin portals |
 | [Mailer](./guides/mailer.md) | Gmail (app password) and custom SMTP setup, sending email from a task |
+| [Sign in with Google & Apple](./guides/oauth.md) | `efc add auth@google` / `auth@apple`: setup, flow, account linking |
 | [Environment Variables](./guides/environment-variables.md) | Full `.env` reference |
 | [Error Handling](./guides/error-handling.md) | `HttpError`, custom handlers, task failures |
 | [Deployment](./guides/deployment.md) | Build, start, and ship to production |

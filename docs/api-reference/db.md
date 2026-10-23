@@ -107,6 +107,7 @@ Inner `required` fields of an embedded object only apply when the object is pres
 | `of` | array | Item type: a primitive name or a nested schema |
 | `fields` | object | Typed fields of an embedded object |
 | `sequence` | number | Auto-increment (below) |
+| `renamedFrom` | any (top-level) | The field's previous name: PostgreSQL sync renames the column (keeping the data); on MongoDB `efc db generate` writes a `$rename` migration |
 
 `type: 'object'` without `fields` (and `array` without `of`) store any JSON value unvalidated.
 

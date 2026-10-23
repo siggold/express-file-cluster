@@ -72,6 +72,9 @@ class SchemaBuilder {
 
   private checkDefinition(def: AnyFieldDefinition, path: string, topLevel: boolean) {
     this.checkType(def.type, path);
+    if (def.renamedFrom !== undefined && !topLevel) {
+      this.fail(path, `'renamedFrom' only applies to top-level fields`);
+    }
     if (this.mode === 'model') {
       for (const opt of TABLE_ONLY_OPTIONS) {
         if (def[opt] !== undefined) this.fail(path, `'${opt}' is a defineTable option`);

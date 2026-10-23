@@ -237,6 +237,12 @@ tests; populate/include issues one statement per call (asserted via M6 query log
 
 **Exit criteria:** pull → generate → migrate round-trips the Prisma sample schemas with no diff.
 
+**Done (0.9.0)** — `efc db generate [--allow-drop] [--tighten] [--verify]` (diff against migrations
+replayed into a shadow schema/database, `Model.sync()` suppressed there), `renamedFrom`,
+`sync --dry-run --exit-code`, `migrate --baseline`, `efc db pull` (PostgreSQL) and
+`efc import-prisma`. MongoDB `pull` lands with M5 (it emits `defineCollection`). Exit criterion
+covered by `__tests__/integration/db-generate.test.ts`.
+
 ---
 
 ## M5 — `defineCollection`: MongoDB-native model

@@ -141,4 +141,4 @@ efc generate middleware authorize
 # → src/middlewares/authorize.ts
 ```
 
-> Route-level role protection doesn't need a custom middleware like `authorize` above — `requireAuth` itself accepts role names: `requireAuth('admin')`. `create-efc-app`'s **RBAC** feature option scaffolds routes that use this shorthand (plus a `Role` model) instead of an inline guard. See [RBAC](../guides/rbac.md).
+> Route-level role protection doesn't need a custom middleware like `authorize` above — `requireAuth` itself accepts role names: `requireAuth('admin')`. The routes `efc add` generates use this shorthand, and `efc add admin-admins` adds a `Role` model. See [RBAC](../guides/rbac.md).

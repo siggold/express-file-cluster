@@ -1,14 +1,21 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { scaffold, type ScaffoldOptions } from './scaffold.js';
 import {
-  scaffold,
-  type ScaffoldOptions,
-  type AdminFeatures,
-  type UserFeatures,
-  NO_ADMIN_FEATURES,
-  NO_USER_FEATURES,
-} from './scaffold.js';
+  ITEMS,
+  envFromAnswers,
+  itemPrompts,
+  normalizeAnswer,
+  promptApplies,
+  promptDefault,
+  registryOptions,
+  setEnvValues,
+  withDependencies,
+  writeManifest,
+  type PromptAnswers,
+} from './registry.js';
 
 function cancel(msg = 'Cancelled'): never {
   p.cancel(msg);
@@ -62,278 +69,127 @@ async function main(): Promise<void> {
     modelApi = api as ScaffoldOptions['modelApi'];
   }
 
-  const authStrategy = await p.select({
-    message: 'Authentication strategy:',
-    options: [
-      { value: 'http-only', label: 'http-only', hint: 'secure cookie — recommended for SSR' },
-      { value: 'localStorage', label: 'localStorage', hint: 'bearer token — for SPAs' },
-    ],
+  // pg-boss keeps jobs in the app's own PostgreSQL; BullMQ needs Redis.
+  const taskBackend = await p.select({
+    message: 'Task queue backend:',
+    options:
+      database === 'postgresql'
+        ? [
+            { value: 'pg-boss', label: 'pg-boss', hint: 'uses your PostgreSQL — no Redis' },
+            { value: 'bullmq', label: 'BullMQ', hint: 'Redis' },
+          ]
+        : [{ value: 'bullmq', label: 'BullMQ', hint: 'Redis' }],
   });
-  if (p.isCancel(authStrategy)) cancel();
+  if (p.isCancel(taskBackend)) cancel();
 
-  const features = await p.multiselect({
-    message: 'Features: (space to toggle, enter to confirm)',
-    options: [
-      { value: 'cluster', label: 'Multi-core clustering', hint: 'Node cluster module' },
-      { value: 'tasks', label: 'Background tasks', hint: 'BullMQ / pg-boss' },
-      { value: 'routeDocs', label: 'API route documentation', hint: 'meta exports + dashboard' },
-      { value: 'userPortal', label: 'User portal', hint: 'auth, profile, billing routes' },
-      { value: 'adminPortal', label: 'Admin portal', hint: 'dashboard, user mgmt, analytics' },
-      { value: 'rbac', label: 'Role-based access control', hint: "requireAuth('role') middleware" },
-      { value: 'mailer', label: 'Mailer', hint: 'nodemailer + SMTP' },
-    ],
-    initialValues: ['cluster', 'tasks', 'routeDocs', 'userPortal', 'adminPortal', 'rbac'],
+  const cluster = await p.confirm({
+    message: 'Multi-core clustering? (one worker per CPU in production)',
+    initialValue: true,
+  });
+  if (p.isCancel(cluster)) cancel();
+
+  // The base app is the server, src/api, src/tasks and the database. Features are registry
+  // items — the same ones `efc add` installs later.
+  const groupLabel: Record<string, string> = {
+    auth: 'Auth',
+    user: 'User portal',
+    admin: 'Admin portal',
+    integrations: 'Integrations',
+  };
+  const groups: Record<string, { value: string; label: string; hint: string }[]> = {};
+  for (const item of ITEMS) {
+    (groups[groupLabel[item.group]!] ??= []).push({
+      value: item.name,
+      label: item.title,
+      hint: item.description,
+    });
+  }
+  const picked = await p.groupMultiselect({
+    message: `Add features now? ${pc.dim('(space to toggle, enter to confirm — or add any later with `efc add <item>`)')}`,
+    options: groups,
     required: false,
   });
-  if (p.isCancel(features)) cancel();
+  if (p.isCancel(picked)) cancel();
+  const items = withDependencies(picked as string[]);
 
-  const selected = new Set(features as string[]);
-
-  let userFeatures: UserFeatures = NO_USER_FEATURES;
-  if (selected.has('userPortal')) {
-    const chosen = await p.multiselect({
-      message: 'User portal features: (space to toggle, enter to confirm)',
+  let authStrategy: ScaffoldOptions['authStrategy'] = 'http-only';
+  if (items.includes('auth')) {
+    const strategy = await p.select({
+      message: 'Authentication strategy:',
       options: [
-        {
-          value: 'profileViewing',
-          label: 'Profile viewing & editing',
-          hint: 'GET/PUT /user/profile',
-        },
-        {
-          value: 'forgotPassword',
-          label: 'Forgot / reset password',
-          hint: 'forgot-password, reset-password',
-        },
-        {
-          value: 'accountSecurity',
-          label: 'Change password, 2FA & sessions',
-          hint: 'change-password, 2fa/*, sessions/*, token refresh',
-        },
-        {
-          value: 'emailVerification',
-          label: 'Email verification',
-          hint: 'verify-email route + registration flow',
-        },
-        {
-          value: 'accountSettings',
-          label: 'Account settings',
-          hint: 'avatar, settings, account, dashboard, activity',
-        },
-        { value: 'notifications', label: 'Notifications', hint: 'user/notifications' },
-        {
-          value: 'filesAndMedia',
-          label: 'Files, favorites & bookmarks',
-          hint: 'files, favorites, bookmarks, search',
-        },
-        {
-          value: 'apiAndBilling',
-          label: 'API keys & billing',
-          hint: 'api-keys, plans, subscription, invoices',
-        },
-        { value: 'support', label: 'Support tickets', hint: 'create & view own tickets' },
+        { value: 'http-only', label: 'http-only', hint: 'secure cookie — recommended for SSR' },
+        { value: 'localStorage', label: 'localStorage', hint: 'bearer token — for SPAs' },
       ],
-      initialValues: [
-        'profileViewing',
-        'forgotPassword',
-        'accountSecurity',
-        'emailVerification',
-        'accountSettings',
-        'notifications',
-        'filesAndMedia',
-        'apiAndBilling',
-        'support',
-      ],
-      required: false,
     });
-    if (p.isCancel(chosen)) cancel();
-    const uSet = new Set(chosen as string[]);
-    userFeatures = {
-      profileViewing: uSet.has('profileViewing'),
-      forgotPassword: uSet.has('forgotPassword'),
-      accountSecurity: uSet.has('accountSecurity'),
-      emailVerification: uSet.has('emailVerification'),
-      accountSettings: uSet.has('accountSettings'),
-      notifications: uSet.has('notifications'),
-      filesAndMedia: uSet.has('filesAndMedia'),
-      apiAndBilling: uSet.has('apiAndBilling'),
-      support: uSet.has('support'),
-    };
+    if (p.isCancel(strategy)) cancel();
+    authStrategy = strategy as ScaffoldOptions['authStrategy'];
   }
 
-  let adminFeatures: AdminFeatures = NO_ADMIN_FEATURES;
-  if (selected.has('adminPortal')) {
-    const chosen = await p.multiselect({
-      message: 'Admin panel features: (space to toggle, enter to confirm)',
-      options: [
-        {
-          value: 'userManagement',
-          label: 'User management',
-          hint: 'list/create/suspend/verify/export users + dashboard stats',
-        },
-        {
-          value: 'adminManagement',
-          label: 'Admin & role management',
-          hint: 'manage other admins' + (selected.has('rbac') ? ' + roles' : ''),
-        },
-        { value: 'analytics', label: 'Analytics', hint: 'users, revenue, traffic dashboards' },
-        {
-          value: 'contentManagement',
-          label: 'Content management',
-          hint: 'FAQs, blog posts, categories',
-        },
-        {
-          value: 'billingManagement',
-          label: 'Billing management',
-          hint: 'plans, coupons, subscriptions',
-        },
-        { value: 'supportManagement', label: 'Support tickets', hint: 'view & respond to tickets' },
-        {
-          value: 'notificationsAndLogs',
-          label: 'Notifications & audit logs',
-          hint: 'broadcast + audit/activity/security logs',
-        },
-        {
-          value: 'systemSettings',
-          label: 'System settings & health',
-          hint: 'app settings, health check, cache',
-        },
-      ],
-      initialValues: [
-        'userManagement',
-        'adminManagement',
-        'analytics',
-        'contentManagement',
-        'billingManagement',
-        'supportManagement',
-        'notificationsAndLogs',
-        'systemSettings',
-      ],
-      required: false,
-    });
-    if (p.isCancel(chosen)) cancel();
-    const aSet = new Set(chosen as string[]);
-    adminFeatures = {
-      userManagement: aSet.has('userManagement'),
-      adminManagement: aSet.has('adminManagement'),
-      analytics: aSet.has('analytics'),
-      contentManagement: aSet.has('contentManagement'),
-      billingManagement: aSet.has('billingManagement'),
-      supportManagement: aSet.has('supportManagement'),
-      notificationsAndLogs: aSet.has('notificationsAndLogs'),
-      systemSettings: aSet.has('systemSettings'),
-    };
-  }
-
-  let taskBackend: ScaffoldOptions['taskBackend'];
-  if (selected.has('tasks')) {
-    const backend = await p.select({
-      message: 'Task queue backend:',
-      options: [
-        { value: 'bullmq', label: 'BullMQ', hint: 'Redis' },
-        {
-          value: 'pg-boss',
-          label: 'pg-boss',
-          hint: database === 'postgresql' ? 'uses your PostgreSQL — no Redis' : 'needs PostgreSQL',
-        },
-      ],
-    });
-    if (p.isCancel(backend)) cancel();
-    taskBackend = backend as ScaffoldOptions['taskBackend'];
-  }
-
-  let smtpProvider: ScaffoldOptions['smtpProvider'];
-  let smtpHost: string | undefined;
-  let smtpPort: string | undefined;
-  let smtpUser: string | undefined;
-  let smtpPass: string | undefined;
-  if (selected.has('mailer')) {
-    const provider = await p.select({
-      message: 'Email provider:',
-      options: [
-        { value: 'gmail', label: 'Gmail', hint: 'smtp.gmail.com, preconfigured' },
-        { value: 'custom', label: 'Other (custom SMTP)', hint: "you'll provide host + port" },
-      ],
-    });
-    if (p.isCancel(provider)) cancel();
-    smtpProvider = provider as ScaffoldOptions['smtpProvider'];
-
-    if (smtpProvider === 'custom') {
-      const host = await p.text({
-        message: 'SMTP host:',
-        placeholder: 'smtp.mailtrap.io',
-        validate: (v) => (!v.trim() ? 'SMTP host is required' : undefined),
+  // Each feature's own questions (SMTP for the email client, OAuth credentials…) — the same
+  // ones `efc add` asks. Answers named like env vars go into .env.
+  const answers: PromptAnswers = {};
+  const prompts = itemPrompts(items);
+  for (const q of prompts) {
+    if (!promptApplies(q, answers)) continue;
+    if (q.note) p.note(q.note);
+    if (q.type === 'select') {
+      const choice = await p.select({
+        message: q.message,
+        options: (q.options ?? []).map((o) => ({
+          value: o.value,
+          label: o.label,
+          ...(o.hint !== undefined && { hint: o.hint }),
+        })),
       });
-      if (p.isCancel(host)) cancel();
-      smtpHost = host as string;
-
-      const port = await p.text({
-        message: 'SMTP port:',
-        placeholder: '587',
-        defaultValue: '587',
-      });
-      if (p.isCancel(port)) cancel();
-      smtpPort = port as string;
+      if (p.isCancel(choice)) cancel();
+      answers[q.name] = choice as string;
+      continue;
     }
-
-    const user = await p.text({
-      message: smtpProvider === 'gmail' ? 'Gmail address:' : 'SMTP username / email:',
-      placeholder: 'you@example.com',
-      validate: (v) => (!v.trim() ? 'Email is required' : undefined),
-    });
-    if (p.isCancel(user)) cancel();
-    smtpUser = user as string;
-
-    if (smtpProvider === 'gmail') {
-      p.note(
-        'Google no longer accepts your regular account password for SMTP.\n' +
-          'Generate a 16-character App Password: Google Account -> Security -> 2-Step Verification -> App passwords.\n' +
-          'Enter it below without spaces (not your Gmail login password).',
-        'Gmail app password required',
-      );
-    }
-
-    const pass = await p.password({
-      message: smtpProvider === 'gmail' ? 'Gmail app password (16 characters):' : 'SMTP password:',
-      validate: (v) => {
-        if (!v.trim()) return 'Password is required';
-        if (smtpProvider === 'gmail' && v.replace(/\s/g, '').length !== 16) {
-          return 'Gmail app passwords are 16 characters — this looks like a regular password, not an app password';
-        }
-        return undefined;
-      },
-    });
-    if (p.isCancel(pass)) cancel();
-    smtpPass = (pass as string).replace(/\s/g, '');
+    const def = promptDefault(q, answers);
+    const check = (v: string) => {
+      const r = normalizeAnswer(q, v.trim() === '' ? (def ?? '') : v);
+      return 'error' in r ? r.error : undefined;
+    };
+    const raw =
+      q.type === 'password'
+        ? await p.password({ message: q.message, validate: check })
+        : await p.text({
+            message: q.message,
+            ...(q.placeholder !== undefined && { placeholder: q.placeholder }),
+            ...(def !== undefined && { placeholder: def, defaultValue: def }),
+            validate: check,
+          });
+    if (p.isCancel(raw)) cancel();
+    const r = normalizeAnswer(q, (raw as string).trim() === '' ? (def ?? '') : (raw as string));
+    answers[q.name] = 'value' in r ? r.value : '';
   }
+  const env = envFromAnswers(prompts, answers);
 
-  const opts: ScaffoldOptions = {
-    projectName: projectName as string,
-    language: language as ScaffoldOptions['language'],
-    database: database as ScaffoldOptions['database'],
-    authStrategy: authStrategy as ScaffoldOptions['authStrategy'],
-    cluster: selected.has('cluster'),
-    tasks: selected.has('tasks'),
-    routeDocs: selected.has('routeDocs'),
-    userPortal: selected.has('userPortal'),
-    adminPortal: selected.has('adminPortal'),
-    userFeatures,
-    adminFeatures,
-    rbac: selected.has('rbac'),
-    mailer: selected.has('mailer'),
-    ...(modelApi !== undefined && { modelApi }),
-    ...(taskBackend !== undefined && { taskBackend }),
-    ...(smtpProvider !== undefined && { smtpProvider }),
-    ...(smtpHost !== undefined && { smtpHost }),
-    ...(smtpPort !== undefined && { smtpPort }),
-    ...(smtpUser !== undefined && { smtpUser }),
-    ...(smtpPass !== undefined && { smtpPass }),
-  };
+  const opts = registryOptions(
+    {
+      language: language as ScaffoldOptions['language'],
+      database: database as ScaffoldOptions['database'],
+      modelApi: modelApi ?? 'defineModel',
+    },
+    items,
+    {
+      projectName: projectName as string,
+      authStrategy,
+      cluster: cluster as boolean,
+      taskBackend: taskBackend as 'bullmq' | 'pg-boss',
+      ...(answers['provider'] === 'custom' && { smtpProvider: 'custom' as const }),
+    },
+  );
 
   const spinner = p.spinner();
   spinner.start('Scaffolding project…');
 
   try {
     await scaffold(opts);
+    if (Object.keys(env).length) {
+      await setEnvValues(path.resolve(process.cwd(), opts.projectName, '.env'), env);
+    }
+    await writeManifest(path.resolve(process.cwd(), opts.projectName), opts, items);
     spinner.stop('Project created');
   } catch (err) {
     spinner.stop('Failed to scaffold project');
@@ -351,13 +207,12 @@ async function main(): Promise<void> {
   });
   spinner.stop('efc CLI ready');
 
-  if (opts.mailer) {
+  const secrets = Object.keys(env).filter((k) => /PASS|SECRET|PRIVATE_KEY/.test(k));
+  if (secrets.length) {
     p.note(
-      `SMTP_USER and SMTP_PASS were written to ${projectName as string}/.env — that file is gitignored, never commit it.\n` +
-        (opts.smtpProvider === 'gmail'
-          ? 'If this Gmail app password ever leaks, revoke it and generate a new one.'
-          : 'Rotate SMTP_PASS immediately if it is ever exposed.'),
-      'Mailer credentials',
+      `${secrets.join(', ')} ${secrets.length > 1 ? 'were' : 'was'} written to ${projectName as string}/.env — that file is gitignored, never commit it.\n` +
+        'Rotate any of them immediately if it is ever exposed.',
+      'Credentials',
     );
   }
 
@@ -367,7 +222,8 @@ async function main(): Promise<void> {
     pc.green(`\nYour project is ready!\n\n`) +
       pc.dim(`  cd ${projectName as string}\n`) +
       pc.dim(`  efc start dev\n`) +
-      pc.dim(`\n  (or: npm run dev)\n`),
+      pc.dim(`\n  (or: npm run dev)\n`) +
+      pc.dim(`\n  Add features any time: efc list · efc add <item>\n`),
   );
 }
 

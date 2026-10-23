@@ -8,7 +8,13 @@ import {
   type FieldNode,
   type SchemaTree,
 } from './schema.js';
-import { currentTx, isAutoSync } from './engine.js';
+import {
+  currentTx,
+  isAutoSync,
+  isSyncSuppressed,
+  type PlanOptions,
+  type PlanStep,
+} from './engine.js';
 import { notInstalled } from './postgres.js';
 import { getLogger } from '../logger.js';
 import { countStatement, untracked, whenQueryTracking } from './query-log.js';
@@ -17,6 +23,7 @@ type AnyRecord = Record<string, unknown>;
 /** What each engine adapter implements; `defineModel` adds `name`, `upsert` and the `distinct` rules. */
 export type EngineModel<T extends object> = Omit<ModelCRUD<T>, 'name' | 'upsert' | 'distinct'> & {
   distinct(field: string, filter?: Filter<T>): Promise<unknown[]>;
+  plan(options?: PlanOptions): Promise<PlanStep[]>;
 };
 
 let mongoosePromise: Promise<typeof MongooseNS> | undefined;
@@ -449,6 +456,7 @@ export function mongoModel<T extends object>(
     raw: () => model(),
 
     async sync(opts) {
+      if (isSyncSuppressed()) return [];
       const M = await model();
       const changes: string[] = [];
       const exists =
@@ -466,6 +474,75 @@ export function mongoModel<T extends object>(
       }
       await M.syncIndexes();
       return changes;
+    },
+
+    // MongoDB has no columns: a migration creates the collection, builds and drops
+    // indexes, and moves `renamedFrom` fields in the stored documents.
+    async plan() {
+      const M = await model();
+      const col = M.collection.collectionName;
+      const J = (v: unknown) => JSON.stringify(v);
+      const on = `db.collection(${J(col)})`;
+      const steps: PlanStep[] = [];
+      const exists = (await M.db.db!.listCollections({ name: col }).toArray()).length > 0;
+      if (!exists) {
+        steps.push({
+          phase: 'main',
+          sql: `await db.createCollection(${J(col)}).catch((err) => { if (err?.code !== 48) throw err; });`,
+          down: `await db.dropCollection(${J(col)}).catch((err) => { if (err?.code !== 26) throw err; });`,
+        });
+      }
+      const live = exists ? await M.collection.indexes() : [];
+      const diff = await M.diffIndexes().catch(() => ({ toDrop: [], toCreate: [] }));
+      for (const idx of diff.toDrop) {
+        const spec = live.find((i) => i.name === idx);
+        const { key, name: idxName, ...rest } = (spec ?? {}) as Record<string, unknown>;
+        delete rest['v'];
+        steps.push({
+          phase: 'main',
+          sql: `await ${on}.dropIndex(${J(idx)}).catch((err) => { if (err?.code !== 27) throw err; });`,
+          ...(key !== undefined && {
+            down: `await ${on}.createIndex(${J(key)}, ${J({ ...rest, name: idxName })});`,
+          }),
+        });
+      }
+      // Renames between dropping stale indexes (a unique index on the old name would see
+      // duplicate nulls) and building new ones (which must see the moved values).
+      for (const [field, node] of Object.entries(tree)) {
+        const from = node.def.renamedFrom;
+        if (from === undefined) continue;
+        const move = (a: string, b: string) =>
+          `await ${on}.updateMany({ ${J(a)}: { $exists: true }, ${J(b)}: { $exists: false } }, { $rename: { ${J(a)}: ${J(b)} } });`;
+        steps.push({ phase: 'main', sql: move(from, field), down: move(field, from) });
+      }
+      const declared = M.schema.indexes();
+      for (const keys of diff.toCreate as Record<string, unknown>[]) {
+        const found = declared.find(([k]: [unknown, unknown]) => J(k) === J(keys));
+        const opts: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(found?.[1] ?? {}))
+          if (
+            [
+              'unique',
+              'sparse',
+              'expireAfterSeconds',
+              'name',
+              'partialFilterExpression',
+              'weights',
+            ].includes(k)
+          )
+            opts[k] = v;
+        const idxName =
+          (opts['name'] as string | undefined) ??
+          Object.entries(keys)
+            .map(([k, v]) => `${k}_${String(v)}`)
+            .join('_');
+        steps.push({
+          phase: 'main',
+          sql: `await ${on}.createIndex(${J(keys)}, ${J({ ...opts, name: idxName })});`,
+          down: `await ${on}.dropIndex(${J(idxName)}).catch(() => {});`,
+        });
+      }
+      return steps;
     },
 
     async drop() {
