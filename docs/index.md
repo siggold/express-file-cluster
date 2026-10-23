@@ -2,7 +2,7 @@
 
 **express-file-cluster (EFC)** is an opinionated backend framework built on Express. It removes routing ceremony, saturates every CPU core automatically, and ships a production-grade background-task subsystem — all from a single `ignite()` call.
 
-> **Status: v0.8.0 — Beta.** File-based routing (incl. catch-all and optional segments), request validation, clustering, auth, structured logging, MongoDB and PostgreSQL models with types inferred from the schema, PostgreSQL-native `defineTable` (Prisma-style queries and relations: foreign keys, many-to-many, `include`, relation filters, nested writes), query logging, BullMQ and pg-boss tasks with cron and dead-letter tooling, migrations, and the `efc add` feature registry (auth, admin, billing… copied into your app as source you own) are all implemented.
+> **Status: v0.9.0 — Beta.** File-based routing (incl. catch-all and optional segments), request validation, clustering, auth, structured logging, MongoDB and PostgreSQL models with types inferred from the schema, PostgreSQL-native `defineTable` (Prisma-style queries and relations: foreign keys, many-to-many, `include`, relation filters, nested writes), query logging, BullMQ and pg-boss tasks with cron and dead-letter tooling, migrations (written for you from model changes: `efc db generate`, plus `efc db pull` and `efc import-prisma`), and the `efc add` feature registry (auth, admin, billing… copied into your app as source you own) are all implemented.
 
 ---
 
@@ -37,6 +37,8 @@
 | [Authentication](./guides/authentication.md) | JWT strategies, login/logout, `requireAuth` |
 | [RBAC](./guides/rbac.md) | Role-based route protection via the `requireAuth('role')` shorthand |
 | [Database](./guides/database.md) | `defineModel`, queries, transactions, MongoDB vs PostgreSQL |
+| [Which model API?](./guides/which-api.md) | `defineModel` vs `defineTable`, and moving between them |
+| [Relations](./guides/relations.md) | Foreign keys, many-to-many, `include`, relation filters, nested writes |
 | [defineTable](./api-reference/table.md) | PostgreSQL-native models: Prisma-style queries, SQL types, aggregation |
 | [Migrations & Seeds](./guides/migrations.md) | `efc db generate / migrate / rollback / pull / seed / studio`, drift checks |
 | [Coming from Prisma](./guides/coming-from-prisma.md) | `efc import-prisma`, schema and query mapping |

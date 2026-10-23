@@ -88,12 +88,24 @@ export interface CorsConfig {
   maxAge?: number;
 }
 
+/** Connection pool settings, per worker process (`databasePool` in `ignite()`). */
+export interface DatabasePoolConfig {
+  /** Most open connections. Default: 10 (pg) / 100 (MongoDB). */
+  max?: number;
+  /** Close a connection idle this long, in ms. Default: 10000 (pg) / never (MongoDB). */
+  idleTimeoutMs?: number;
+  /** Give up waiting for a connection after this long, in ms. Default: no limit (pg); server selection 30000 (MongoDB). */
+  connectionTimeoutMs?: number;
+}
+
 export interface EFCConfig {
   port?: number;
   basePath?: string;
   dashboard?: boolean;
   database?: DatabaseEngine;
   databaseUrl?: string;
+  /** Connection pool settings — per worker, so the total is `max × workers`. */
+  databasePool?: DatabasePoolConfig;
   authStrategy?: AuthStrategy;
   jwtSecret?: string;
   /** JWT lifetime, e.g. '15m', '1h', '7d'. Default: '7d'. */

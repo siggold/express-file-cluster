@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { getLogger } from '../logger.js';
 import { countStatement } from './query-log.js';
+import type { DatabasePoolConfig } from '../types.js';
 
 // Pre-Flight's PostgreSQL connection: a node-postgres Pool (exposed as `db`) plus a
 // Drizzle instance over it that the model adapter queries through.
@@ -17,7 +18,10 @@ export function notInstalled(err: unknown, pkg: string, install: string): Error 
 }
 let orm: any;
 
-export async function connectPostgres(url: string): Promise<Pool> {
+export async function connectPostgres(
+  url: string,
+  poolConfig: DatabasePoolConfig = {},
+): Promise<Pool> {
   let PoolCtor: typeof Pool;
   try {
     const pg = (await import('pg')) as unknown as {
@@ -37,7 +41,14 @@ export async function connectPostgres(url: string): Promise<Pool> {
     throw notInstalled(err, 'drizzle-orm', 'npm install drizzle-orm');
   }
 
-  const next = new PoolCtor({ connectionString: url });
+  const next = new PoolCtor({
+    connectionString: url,
+    ...(poolConfig.max !== undefined && { max: poolConfig.max }),
+    ...(poolConfig.idleTimeoutMs !== undefined && { idleTimeoutMillis: poolConfig.idleTimeoutMs }),
+    ...(poolConfig.connectionTimeoutMs !== undefined && {
+      connectionTimeoutMillis: poolConfig.connectionTimeoutMs,
+    }),
+  });
   // Idle-client errors (e.g. the server restarting) are emitted on the pool; unhandled
   // they would crash the process.
   next.on('error', (err) => getLogger().error({ err }, 'PostgreSQL pool error'));

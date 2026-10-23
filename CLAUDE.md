@@ -17,7 +17,7 @@ A backend framework called **express-file-cluster** (`express-file-cluster` on n
 - Cache (`cache`, `cacheResponse`) on Redis or memory, also used as the JWT session-revocation store
 - CLI (`efc` binary) incl. migrations (hand-written or generated from model diffs: `efc db generate`), seeds, `efc db pull`, `efc import-prisma`, a read-only studio and a shadcn-style feature registry (`efc add | list | view | diff | init`)
 
-**Status: v0.8.0 Beta (Phase 2 complete; Phase 3 data layer: M1 inferred types, M2 `defineTable`, M3 relations, M6a query logging; 0.8.0: `efc add` feature registry).** See `README.md` and `docs/` for full documentation.
+**Status: v0.9.0 — Beta launch (Phase 2 complete; Phase 3 data layer: M1 inferred types, M2 `defineTable`, M3 relations, M4 schema lifecycle, M6a query logging; `efc add` feature registry). Releases from here are minor bumps (0.10.0, 0.11.0, …).** See `README.md` and `docs/` for full documentation.
 
 ---
 
@@ -84,7 +84,7 @@ src/api/docs/[...slug].ts    → /docs/a/b  (req.params.slug = ['a', 'b'])
 
 ## Database — the exact rules
 
-- Engine = `config.database` ?? `databaseUrl` scheme; models compile on first use (define at import time is fine)
+- Engine = `config.database` ?? `databaseUrl` scheme; models compile on first use (define at import time is fine); `databasePool: { max, idleTimeoutMs, connectionTimeoutMs }` sizes the per-worker pool (pg Pool / mongoose)
 - MongoDB needs `mongoose`; PostgreSQL needs `pg` + `drizzle-orm` (all optional peers)
 - Tables (PostgreSQL) / collections + indexes (MongoDB) reconcile automatically on a model's first use (`autoSync`, default true; advisory-locked, one transaction). Sync adds columns, renames `renamedFrom` columns, converts types, drops NOT NULLs the model doesn't ask for (keeps them on required fields), rebuilds enum CHECKs (NOT VALID), creates/drops EFC-named indexes — never drops columns or rows. `efc db sync [--dry-run] [--exit-code]` (exit 2 = drift); `autoSync: false` leaves it to migrations
 - `efc db generate [name] [--allow-drop] [--tighten] [--verify]` replays `src/migrations` into a throwaway schema (pg, via search_path) / database (mongo) with `Model.sync()` suppressed, plans each model against it (`RegisteredModel.plan()` → `PlanStep`s: idempotent SQL with `skipIf` guards, `check` row counts, best-effort `down`; FKs last) and writes `src/migrations/<ts>_<name>`; `--verify` fails if replaying all migrations misses anything. `efc db migrate --baseline` records without running. `efc db pull` (pg only, `db/pull.ts`) and `efc import-prisma` (`db/prisma-import.ts`) write defineTable files via `db/codegen.ts`

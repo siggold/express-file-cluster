@@ -111,7 +111,7 @@ Wrong answers are asked again. A question is only asked for a variable the app d
 
 ```json
 {
-  "registry": "0.8.0",
+  "registry": "0.9.0",
   "language": "typescript",
   "database": "postgresql",
   "modelApi": "defineTable",

@@ -5,17 +5,20 @@ import fcntl, os, pty, re, select, struct, sys, termios, time
 S, workdir, name, lang, db, backend = sys.argv[1:7]
 env = dict(os.environ, npm_config_userconfig=f'{S}/npmrc', npm_config_cache=f'{S}/cache',
            npm_config_prefix=f'{S}/global', FORCE_COLOR='0', TERM='xterm-256color')
-DOWN, ENTER = '\x1b[B', '\r'
+DOWN, ENTER, SPACE = '\x1b[B', '\r', ' '
+# Feature picker rows (cursor starts on the first group header): 0 Auth, 1 auth, 2 auth@google,
+# 3 auth@apple, 4 User portal (+9 items), 14 Admin portal (+9 items), 24 Integrations.
+# Picks auth and both portal groups; OAuth and the email client ask for credentials, so they stay off.
+features = DOWN + SPACE + DOWN * 3 + SPACE + DOWN * 10 + SPACE + ENTER
 steps = [
     ('Project name', name + ENTER),
     ('Language', (DOWN if lang == 'js' else '') + ENTER),
     ('Database', (DOWN if db == 'postgresql' else '') + ENTER),
     *([('Models:', ENTER)] if db == 'postgresql' else []),  # default: defineTable
+    ('Task queue backend', (DOWN if db == 'postgresql' and backend == 'bullmq' else '') + ENTER),
+    ('Multi-core clustering', ENTER),
+    ('Add features now', features),
     ('Authentication strategy', ENTER),
-    ('Features:', ENTER),                      # defaults: cluster, tasks, routeDocs, portals, rbac
-    ('User portal features', ENTER),
-    ('Admin panel features', ENTER),
-    ('Task queue backend', (DOWN if backend == 'pg-boss' else '') + ENTER),
 ]
 pid, fd = pty.fork()
 if pid != 0:

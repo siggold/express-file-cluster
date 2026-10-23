@@ -166,10 +166,10 @@ export async function ignite(config: EFCConfig): Promise<http.Server | undefined
   if (database) setDbEngine(database);
   setAutoSync(config.autoSync ?? true);
   if (database === 'mongodb' && databaseUrl) {
-    const conn = await connectMongo(databaseUrl);
+    const conn = await connectMongo(databaseUrl, config.databasePool);
     setDbClient(conn as unknown as Record<string, unknown>);
   } else if (database === 'postgresql' && databaseUrl) {
-    const pool = await connectPostgres(databaseUrl);
+    const pool = await connectPostgres(databaseUrl, config.databasePool);
     setDbClient(pool as unknown as Record<string, unknown>);
   }
 
@@ -332,6 +332,7 @@ export { listTasks } from './tasks/index.js';
 export { workerCount } from './cluster/index.js';
 export type {
   EFCConfig,
+  DatabasePoolConfig,
   CorsConfig,
   RouteEntry,
   RouteMeta,

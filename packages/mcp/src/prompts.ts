@@ -66,7 +66,10 @@ export function registerPrompts(server: McpServer): void {
     ({ entity }) =>
       ask(`Design an EFC model for ${entity}, with the queries and writes a typical API needs.`, [
         'guides/database',
+        'guides/which-api',
         'api-reference/db',
+        'api-reference/table',
+        'guides/relations',
         'guides/migrations',
       ]),
   );

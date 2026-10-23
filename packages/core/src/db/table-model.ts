@@ -933,10 +933,19 @@ class TableRuntime {
 
       after.push(async (owner) => {
         if (rel.kind === 'one') {
-          if (mode === 'update' && (ops?.['create'] || ops?.['connect'] || ops?.['disconnect'])) {
-            await unlink(owner); // the current one, if any, steps aside
-          }
           if (ops?.['delete']) await T.deleteMany({ where: mine(owner) });
+          if (mode === 'update' && (ops?.['create'] || ops?.['connect'] || ops?.['disconnect'])) {
+            // The current one, if any, steps aside — unless its foreign key is required.
+            if (!T.tbl.columns.get(fk)?.node?.def.required) await unlink(owner);
+            else if (
+              (await T.findMany({ where: mine(owner), select: { id: true }, take: 1 })).length
+            ) {
+              this.fail(
+                key,
+                `${rel.target}.${fk} is required, so the current ${rel.target} can't be unlinked — add delete: true to replace it`,
+              );
+            }
+          }
           if (ops?.['connect'] !== undefined) await link(owner, ops['connect']);
           if (ops?.['create'] !== undefined) await createChild(owner, ops['create']);
           return;

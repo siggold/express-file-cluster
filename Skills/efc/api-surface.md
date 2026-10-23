@@ -91,6 +91,7 @@ interface EFCConfig {
   dashboard?: boolean;              // dev-only route docs at '/'
   database?: 'mongodb' | 'postgresql'; // default: inferred from databaseUrl scheme
   databaseUrl?: string;
+  databasePool?: { max?: number; idleTimeoutMs?: number; connectionTimeoutMs?: number }; // per worker
   authStrategy?: 'http-only' | 'localStorage';
   jwtSecret?: string;
   jwtExpiresIn?: string;            // default '7d'

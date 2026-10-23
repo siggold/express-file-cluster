@@ -403,6 +403,9 @@ await User.update({
 - `connect`, `disconnect`, `set` and `delete` take unique wheres (or ids); a list or a single one.
   A `connect` that matches nothing is a **400** on the field.
 - Children created through a back-relation get their foreign key from the parent — leave it out.
+- On `update`, a `hasOne` `create` / `connect` / `disconnect` first unlinks the current child (its
+  foreign key is set to `null`). If that key is `required` and a child exists, it's a **400**:
+  add `delete: true` (`profile: { delete: true, create: { … } }`) to replace it.
 - The whole call runs in **one transaction**: anything failing rolls it all back.
 - `createMany` / `updateMany` write rows only; they refuse nested writes, as in Prisma.
 - `upsert` with nested writes reads first, then creates or updates, in the transaction (without

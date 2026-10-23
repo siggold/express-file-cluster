@@ -1,6 +1,6 @@
 {
   "name": "express-file-cluster-mcp",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "MCP server for express-file-cluster (EFC): the framework's docs, rules and scaffolding tools for AI coding agents",
   "homepage": "https://efc.prashantadhikari7.com.np/docs.html",
   "repository": {

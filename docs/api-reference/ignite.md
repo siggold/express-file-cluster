@@ -31,6 +31,7 @@ interface EFCConfig {
   // Database
   database?: 'mongodb' | 'postgresql';
   databaseUrl?: string;
+  databasePool?: { max?: number; idleTimeoutMs?: number; connectionTimeoutMs?: number };
 
   // Auth
   authStrategy?: 'http-only' | 'localStorage';
@@ -147,6 +148,24 @@ Database engine to connect. When omitted, EFC detects it from the `databaseUrl` 
 ### `databaseUrl`
 
 Connection string for the database. `ignite()` never reads `DATABASE_URL` from the environment itself — pass it explicitly (typically `databaseUrl: process.env.DATABASE_URL` in `efc.config.ts`).
+
+---
+
+### `databasePool`
+
+Connection pool settings. Each worker process has its own pool, so the database sees up to `max × workers` connections. Keep that under the server's limit (PostgreSQL's `max_connections` defaults to 100).
+
+```ts
+databasePool: { max: 5, idleTimeoutMs: 30_000, connectionTimeoutMs: 5_000 },
+```
+
+| Option | PostgreSQL (`pg` Pool) | MongoDB (mongoose) |
+|---|---|---|
+| `max` | `max` — default 10 | `maxPoolSize` — default 100 |
+| `idleTimeoutMs` | `idleTimeoutMillis` — default 10000 | `maxIdleTimeMS` — default: never |
+| `connectionTimeoutMs` | `connectionTimeoutMillis` — default: no limit | `serverSelectionTimeoutMS` (default 30000) and `waitQueueTimeoutMS` (default: no limit) |
+
+Unset options keep the driver's default. `efc db` commands use the defaults.
 
 ---
 

@@ -33,6 +33,8 @@ const config: EFCConfig = {
 };
 ```
 
+Not sure whether to use `defineModel` or the PostgreSQL-native `defineTable`? See [Which model API?](./which-api.md).
+
 Each worker process connects once during Pre-Flight, before routes mount — no cold connection on the first request.
 
 ---
