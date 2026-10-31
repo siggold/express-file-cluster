@@ -138,6 +138,37 @@ export const GET = (_req, res) => res.json({ reached: true });`,
     expect((await request(server!).delete('/items/1')).status).toBe(405);
   });
 
+  it('returns 405 with Allow for methods outside the EFC method set', async () => {
+    writeRoute(apiDir, 'health.js', `export const GET = (_req, res) => res.json({ ok: true });`);
+    server = await ignite({ basePath: '/', cluster: false, port: 0 });
+
+    for (const method of ['trace', 'propfind'] as const) {
+      const res = await request(server!)[method]('/health');
+      expect(res.status).toBe(405);
+      expect(res.headers.allow).toBe('GET');
+    }
+    expect((await request(server!).get('/nope')).status).toBe(404);
+  });
+
+  it('rejects outside methods even when every EFC method is exported', async () => {
+    writeRoute(
+      apiDir,
+      'full.js',
+      `export const GET = (_req, res) => res.json({ m: 'GET' });
+export const POST = (_req, res) => res.json({ m: 'POST' });
+export const PUT = (_req, res) => res.json({ m: 'PUT' });
+export const PATCH = (_req, res) => res.json({ m: 'PATCH' });
+export const DELETE = (_req, res) => res.json({ m: 'DELETE' });
+export const HEAD = (_req, res) => res.end();
+export const OPTIONS = (_req, res) => res.end();`,
+    );
+    server = await ignite({ basePath: '/', cluster: false, port: 0 });
+
+    const res = await request(server!).trace('/full');
+    expect(res.status).toBe(405);
+    expect(res.headers.allow).toBe('GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS');
+  });
+
   it('serves optional segments with and without the param', async () => {
     writeRoute(
       apiDir,

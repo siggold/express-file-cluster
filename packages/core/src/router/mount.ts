@@ -76,7 +76,6 @@ export async function mountRoutes(app: IRouter, routes: RouteEntry[]): Promise<M
     }
     const httpOnly: RequestHandler = (req, _res, next) => (isUpgrade(req) ? next('route') : next());
     const implemented = HTTP_METHODS.filter((method) => typeof mod[method] === 'function');
-    const unimplemented = HTTP_METHODS.filter((method) => typeof mod[method] !== 'function');
     // Express GET also matches HEAD, so explicit HEAD must be registered first.
     const order = ['HEAD', ...HTTP_METHODS.filter((method) => method !== 'HEAD')] as HttpMethod[];
     for (const method of order) {
@@ -94,11 +93,15 @@ export async function mountRoutes(app: IRouter, routes: RouteEntry[]): Promise<M
       );
     }
 
-    if (implemented.length > 0 && unimplemented.length > 0) {
+    // Any method without a handler on an existing route is 405 (with Allow) —
+    // not just the seven EFC names, so TRACE/PROPFIND/custom verbs don't fall
+    // through to a misleading 404. Unreachable for implemented methods because
+    // their layers run first.
+    if (implemented.length > 0) {
       const allowHeader = implemented.join(', ');
       app.all(routePath, (req, res, next) => {
         if (isUpgrade(req)) return next();
-        if ((unimplemented as string[]).includes(req.method)) {
+        if (!implemented.includes(req.method as HttpMethod)) {
           traceRoute(route.urlPath)(req, res, () => {});
           res.set('Allow', allowHeader).status(405).json({ error: 'Method Not Allowed' });
         } else {
