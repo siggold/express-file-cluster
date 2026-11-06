@@ -19,6 +19,8 @@ EFC does not hand-roll the queue. Persistence, retries, backoff, dead-lettering,
 
 ## Defining a task
 
+Task discovery recognizes top-level `.ts`, `.js`, `.mts`, and `.mjs` files. Use `efc tasks` to list their names without running the modules.
+
 ### I/O-bound task
 
 ```ts

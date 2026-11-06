@@ -10,7 +10,7 @@ import { defineTask, enqueue } from 'express-file-cluster/tasks';
 
 ## `defineTask(handler)` / `defineTask(options, handler)`
 
-Creates a `TaskDefinition`. The file's default export must be a `TaskDefinition` for EFC to register the task.
+Creates a `TaskDefinition`. EFC scans top-level `.ts`, `.js`, `.mts`, and `.mjs` task files and registers those whose default export is a `TaskDefinition`. `efc tasks` lists matching filenames without importing them.
 
 ```ts
 // Overloads
