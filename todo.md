@@ -90,7 +90,7 @@
 - [x] `efc generate task <name>`
 - [x] `efc generate middleware <name>`
 - [x] `efc routes` — print resolved route table
-- [x] `efc tasks` — list registered tasks
+- [x] `efc tasks` — list top-level `.ts`, `.js`, `.mts`, and `.mjs` tasks without importing them
 - [x] `efc doctor` — validate config, env vars, project setup
 - [ ] `efc db migrate / rollback / seed / studio` — Phase 2 (listed below)
 - [x] `efc --version` reads from `package.json` at runtime (was hardcoded `0.1.0`; fixed 2026-10-10)

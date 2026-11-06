@@ -36,7 +36,7 @@ Static routes appear before dynamic routes (routes with `:param` segments), matc
 
 ## `efc tasks`
 
-Lists the background tasks found in `src/tasks/`.
+Lists the top-level `.ts`, `.js`, `.mts`, and `.mjs` task files without loading their modules.
 
 ```bash
 efc tasks

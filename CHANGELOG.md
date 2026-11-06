@@ -4,6 +4,10 @@ All three packages (`express-file-cluster`, `create-efc-app`, `express-file-clus
 together under one version. Newest first. The public site's changelog (`client/index.html#changelog`)
 mirrors this file — see `AGENTS.md` §5.
 
+## Unreleased
+
+- Include `.mjs` and `.mts` task files in `efc tasks` and skip directories.
+
 ## 0.12.0 — 2026-10-31
 
 - Production hardening: catch async middleware failures, prefer explicit HEAD handlers, close partial error responses, preserve pg-boss reserved-key payloads, and make thread/shutdown lifecycles deterministic, with isolated thread protocol frames.
