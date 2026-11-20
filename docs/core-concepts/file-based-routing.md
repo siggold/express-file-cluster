@@ -80,6 +80,8 @@ Content-Type: application/json
 
 ---
 
+This includes methods outside the seven supported export names, such as `TRACE` and `PROPFIND`, even when all seven handlers are exported. Unknown paths still return 404; WebSocket upgrades continue through their own pipeline.
+
 ## Dynamic parameters
 
 ```ts

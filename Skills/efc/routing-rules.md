@@ -65,7 +65,7 @@ For each route module:
 4. Register: `app[method](pattern ?? urlPath, ...paramMapper?, ...middlewares, validate?, asyncWrap(handler))`.
    `validate` exists when `schema` has an entry for that method (method key wins over file-wide
    `{ params, query, body }`). It runs AFTER middlewares; failure → 400 with `issues`.
-5. If **any** methods are implemented and **any** are unimplemented: register `app.all(urlPath, ...)` that returns 405 with `Allow: <implemented>` for the missing methods.
+5. If **any** HTTP methods are implemented, register `app.all(pattern ?? urlPath, ...)` that returns 405 with `Allow: <implemented>` for unsupported methods, including `TRACE` and `PROPFIND`, even when all seven export names are implemented. WebSocket upgrades pass through.
 
 **asyncWrap**: `Promise.resolve(handler(req, res, next)).catch(next)` — all route errors auto-forwarded.
 

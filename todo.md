@@ -36,7 +36,7 @@
 - [x] Recursive `apiDir` scan → route map (`router/scan.ts`)
 - [x] Static / index / dynamic segment resolution (`[param]` → `:param`)
 - [x] Method dispatching (uppercase export → HTTP verb)
-- [x] Auto `405` for unimplemented verbs
+- [x] Auto `405` with `Allow` for unimplemented verbs, including methods outside the seven HTTP export names
 - [x] Per-route `middlewares[]` injection
 - [ ] Catch-all / wildcard routes (`[...params].ts`) — Phase 2 (listed below)
 
