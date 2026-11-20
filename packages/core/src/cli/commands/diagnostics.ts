@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { scanDir } from '../../router/scan.js';
+import { listTaskFiles } from '../../tasks/files.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import pc from 'picocolors';
@@ -47,7 +48,7 @@ function tasksCommand(): Command {
       return;
     }
 
-    const files = fs.readdirSync(tasksDir).filter((f) => /\.(ts|js)$/.test(f));
+    const files = listTaskFiles(tasksDir);
     if (files.length === 0) {
       console.log(pc.yellow('No tasks found.'));
       return;

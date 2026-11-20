@@ -41,7 +41,7 @@ npm install --save-dev express-file-cluster
 | `efc db seed [name]` | Run seed scripts |
 | `efc db studio` | Read-only database browser on 127.0.0.1 |
 | `efc routes` | Print the resolved route table |
-| `efc tasks` | List registered background tasks |
+| `efc tasks` | List task names from supported files without importing them |
 | `efc tasks failed \| retry \| purge` | Inspect and act on dead-lettered jobs |
 | `efc doctor` | Validate config, env vars, and project setup |
 | `efc --version` | Print the installed version |

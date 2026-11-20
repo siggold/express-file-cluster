@@ -14,7 +14,7 @@ tasksDir/ResizeImage.ts       → name: "ResizeImage"
 tasksDir/jobs/DoWork.ts       → ERROR — scanTasks only reads top-level files
 ```
 
-`scanTasks` uses `fs.readdirSync(tasksDir)` (non-recursive). **Sub-directories in `tasksDir` are not scanned.**
+`scanTasks` and `efc tasks` share top-level discovery for `.ts`, `.js`, `.mts`, and `.mjs` files. Only the runtime scanner imports the modules.
 
 ---
 
@@ -46,7 +46,7 @@ export default async function(payload: Payload) { ... }
 
 ```
 scanTasks(tasksDir)
-  → fs.readdirSync(tasksDir).filter(f => /\.(ts|js|mts|mjs)$/.test(f))
+  → listTaskFiles(tasksDir)
   → for each file:
       mod = await import(filePath)
       def = mod.default as TaskDefinition

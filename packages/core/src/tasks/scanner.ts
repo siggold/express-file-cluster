@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { registerTask } from './index.js';
+import { listTaskFiles } from './files.js';
 import { getLogger } from '../logger.js';
 import type { TaskDefinition } from '../types.js';
 
 export async function scanTasks(tasksDir: string): Promise<void> {
   if (!fs.existsSync(tasksDir)) return;
 
-  const files = fs.readdirSync(tasksDir).filter((f) => /\.(ts|js|mts|mjs)$/.test(f));
+  const files = listTaskFiles(tasksDir);
 
   for (const file of files) {
     const filePath = path.join(tasksDir, file);
