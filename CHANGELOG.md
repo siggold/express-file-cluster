@@ -4,9 +4,10 @@ All three packages (`express-file-cluster`, `create-efc-app`, `express-file-clus
 together under one version. Newest first. The public site's changelog (`client/index.html#changelog`)
 mirrors this file — see `AGENTS.md` §5.
 
-## Unreleased
+## 0.12.1 — 2026-11-20
 
 - Include `.mjs` and `.mts` task files in `efc tasks` and skip directories.
+- Return 405 with `Allow` for unsupported HTTP methods, including `TRACE` and `PROPFIND`, even when all seven route handlers are exported.
 
 ## 0.12.0 — 2026-10-31
 

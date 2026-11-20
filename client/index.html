@@ -53,7 +53,7 @@
           "applicationCategory": "DeveloperApplication",
           "applicationSubCategory": "Web framework",
           "operatingSystem": "Node.js 18+",
-          "softwareVersion": "0.12.0",
+          "softwareVersion": "0.12.1",
           "license": "https://opensource.org/licenses/MIT",
           "isAccessibleForFree": true,
           "offers": {
@@ -143,7 +143,7 @@
         <div class="hero-glow"></div>
       </div>
       <div class="container hero-inner">
-        <a href="#changelog" class="release fade-up" style="--d: 0s"><span class="release-tag">0.12.0</span>OpenTelemetry tracing and production hardening</a>
+        <a href="#changelog" class="release fade-up" style="--d: 0s"><span class="release-tag">0.12.1</span>Task discovery and HTTP method fixes</a>
         <h1 class="hero-title">Express, but your folder <br />is your <span class="serif">router.</span></h1>
         <p class="hero-sub fade-up" style="--d: .2s">Drop a file in <code>src/api/</code> and it's a route. Clustering,
           background jobs and a typed data layer are already set up.</p>
@@ -491,6 +491,10 @@ res.<span class="c-blue">status</span>(<span class="c-orange">202</span>).<span 
           <h2 class="h2">Recent releases.</h2>
         </header>
         <ol class="releases">
+          <li><span class="v">0.12.1</span><time datetime="2026-11-20">Nov 20</time>
+            <p>Include <code>.mjs</code> and <code>.mts</code> task files in <code>efc tasks</code> and skip directories.</p>
+            <p>Return 405 with <code>Allow</code> for unsupported HTTP methods, including <code>TRACE</code> and <code>PROPFIND</code>, even when all seven route handlers are exported.</p>
+          </li>
           <li><span class="v">0.12.0</span><time datetime="2026-10-31">Oct 31</time>
             <p>Opt-in OpenTelemetry instrumentation for HTTP and background tasks, with W3C parentage, retry/thread propagation, trace log fields and app-owned SDK shutdown after drain. Mixed ESM/CommonJS modules share queue state.</p>
             <p>Production hardening for async middleware, explicit HEAD handlers, partial responses, pg-boss payloads, thread and shutdown lifecycles, session revocation and response-cache isolation. Cache hits replay exact JSON bytes; queue deadlines prevent late readiness submissions.</p>
@@ -648,7 +652,7 @@ res.<span class="c-blue">status</span>(<span class="c-orange">202</span>).<span 
       </div>
       <div class="footer-bottom">
         <span>© 2026 EFC Contributors</span>
-        <span>v0.12.0 · Beta</span>
+        <span>v0.12.1 · Beta</span>
       </div>
     </div>
   </footer>
