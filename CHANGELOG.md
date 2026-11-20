@@ -9,6 +9,8 @@ mirrors this file — see `AGENTS.md` §5.
 - Include `.mjs` and `.mts` task files in `efc tasks` and skip directories.
 - Return 405 with `Allow` for unsupported HTTP methods, including `TRACE` and `PROPFIND`, even when all seven route handlers are exported.
 
+Thanks to [@sshnox](https://github.com/sshnox) for task discovery (#51), [@bfs2021](https://github.com/bfs2021) for HTTP method handling (#46), and [@pr4shxnt](https://github.com/pr4shxnt) for documentation, validation and release preparation.
+
 ## 0.12.0 — 2026-10-31
 
 - Production hardening: catch async middleware failures, prefer explicit HEAD handlers, close partial error responses, preserve pg-boss reserved-key payloads, and make thread/shutdown lifecycles deterministic, with isolated thread protocol frames.
