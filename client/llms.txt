@@ -20,5 +20,10 @@ Install: `npx create-efc-app my-api`. Import paths: `express-file-cluster`, `exp
 OpenAPI: `ignite({ openapi: true })` serves `/openapi.json`; `generateOpenAPI()` also supports offline generation. Route validators need Standard JSON Schema or an explicit adapter.
 WebSockets: export `WS` from a route file; middleware/auth run before the upgrade. Origin checks, payload caps, heartbeat and graceful draining are built in. Auth is handshake-only and broadcasts are worker-local.
 
+## 0.12.1
+
+- Task discovery includes .mjs and .mts and skips directories.
+- Unsupported HTTP methods return 405 with Allow, including when all seven route handlers are exported.
+
 ## 0.12.0
 Opt-in HTTP/task OpenTelemetry tracing, W3C propagation, trace-correlated logs and app-owned SDK shutdown after drain. Upgrade BullMQ to 5.79.1+ or pg-boss to 12.38.0+. Session, cache, async middleware, queue and thread lifecycle hardening. See docs/guides/tracing.md and CHANGELOG.md.
