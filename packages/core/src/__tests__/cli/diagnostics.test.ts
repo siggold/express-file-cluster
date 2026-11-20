@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { diagnosticsCommands } from '../../cli/commands/diagnostics.js';
 
@@ -27,7 +28,7 @@ describe('efc tasks', () => {
       .parseAsync([], {
         from: 'user',
       });
-    return log.mock.calls.map(([line]) => String(line ?? '').trim()).filter(Boolean);
+    return log.mock.calls.map(([line]) => stripVTControlCharacters(String(line ?? '')).trim()).filter(Boolean);
   }
 
   it('finds a project with only an .mjs task without importing it', async () => {
